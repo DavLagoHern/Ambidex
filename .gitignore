@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+.DS_Store
+.codeai-worktrees/
+.ambidex-worktrees/
+*.log
+coverage/
+.vscode/
+.idea/
+*.db
+*.db-wal
+*.db-shm
