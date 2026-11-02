@@ -9,11 +9,13 @@ jobs:
   check:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
+      # la misma versión de npm que generó package-lock.json: otras tratan distinto las dependencias opcionales
+      - run: npm install -g npm@11.5.1
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
