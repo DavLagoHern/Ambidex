@@ -2,6 +2,8 @@
 
 <img src="build/icon.png" width="96" align="right" alt="Ambidex icon">
 
+[![CI](https://github.com/DavLagoHern/Ambidex/actions/workflows/ci.yml/badge.svg)](https://github.com/DavLagoHern/Ambidex/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![macOS](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey)
+
 **Claude Code and Codex, working as one.** · [Español](README.es.md)
 
 Ambidex is a macOS desktop app for building software with **Claude Code** and **OpenAI Codex**: one at a time, side by side, or together in a single chat that decides who should handle each message. It runs the **official CLIs** you already have installed and signed in, so it works with your existing Claude and ChatGPT plans. No API keys, and it never stores credentials.
