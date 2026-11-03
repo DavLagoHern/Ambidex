@@ -24,9 +24,11 @@ export const CATEGORY_CRITERIA: Record<BuiltinCategory, string> = {
   review: 'review code, look for bugs or security problems in existing changes',
   terminal: 'terminal commands, shell scripts, installing dependencies, docker, CI or deployment'
 }
+// Medido con Jev (jevos-v5) sobre 25 mensajes reales: estos aciertan 22; los anteriores, 6 de 12. Lo que más
+// ayuda es juzgar solo el trabajo que pide el mensaje (no el tamaño del proyecto) y nombrar casos concretos.
 export const DIFFICULTY_CRITERIA: Record<ModelTier, string> = {
-  hard: 'complex or risky work: architecture or design decisions, hard-to-find bugs, large refactors, changes across many files, security, performance, concurrency or data migrations',
-  easy: 'simple or routine work: a quick question, an explanation, a small edit in one file, renaming, formatting, copy changes, running a command or a small style tweak'
+  hard: 'hard engineering: design a new system, workflow or architecture; investigate a problem whose cause is unknown (crashes, freezes, intermittent failures, leaks, CI-only failures); race conditions, migrations, security audits; build or rewrite a feature across many files',
+  easy: 'routine: a quick question about the code, an explanation, a small visual tweak (size, spacing, color, font), a small edit or text change, translating strings, git commit/push/tag, restarting, running or installing something'
 }
 
 export const DEFAULT_CATEGORIES: RouteCategoryDef[] = (Object.keys(CATEGORY_CRITERIA) as BuiltinCategory[]).map((id) => ({
@@ -99,25 +101,35 @@ export interface Classification {
 export const TIER_LABELS: Record<ModelTier, string> = { hard: 'difícil', easy: 'sencilla' }
 
 // Modelo de un agente para un mensaje según su dificultad y los modelos permitidos en Ajustes → Modelos.
-// Sin estimación (Jev duda, no contesta a tiempo o deciden las reglas) se usa el de las tareas difíciles.
+// El de las tareas difíciles (el caro) solo si Jev ve el mensaje difícil con cierta seguridad; si duda, no
+// contesta a tiempo o deciden las reglas, el de las sencillas, que sigue siendo muy capaz y gasta bastante menos.
+// Sin `confidence` (lo decidió otra IA, que no da seguridad) se toma la dificultad tal cual.
 // `catalog`: modelos que ofrece el CLI instalado; uno que no esté (CLI antiguo) no se elige.
-export function pickModel(agent: AgentId, tier: ModelTier | undefined, policy: ModelPolicy, catalog?: string[]): { model: string; tier: ModelTier; guessed: boolean } | undefined {
+export const HARD_MODEL_CONFIDENCE = 0.3
+export function pickModel(
+  agent: AgentId,
+  tier: ModelTier | undefined,
+  policy: ModelPolicy,
+  catalog?: string[],
+  confidence?: number
+): { model: string; tier: ModelTier; guessed: boolean } | undefined {
   const p = policy.auto ? policy[agent] : undefined
   const allowed = (p?.allowed ?? []).filter((m) => !catalog || catalog.includes(m))
   if (!p || !allowed.length) return undefined
-  const t = tier ?? 'hard'
+  const sure = tier === 'easy' || (tier === 'hard' && (confidence === undefined || confidence >= HARD_MODEL_CONFIDENCE))
+  const t: ModelTier = sure ? tier! : 'easy'
   const want = [p[t], p[t === 'hard' ? 'easy' : 'hard']].find((m) => allowed.includes(m))
-  return { model: want ?? allowed[0], tier: t, guessed: !tier }
+  return { model: want ?? allowed[0], tier: t, guessed: !sure }
 }
 
 // Razonamiento de un turno en Auto. Por defecto medio; Jev solo lo mueve si lo ve claro: alto para una tarea
-// claramente difícil, bajo para una claramente sencilla. Nunca por encima de alto (muy alto, máximo…): gastan
-// mucho límite y tardan, y eso no se elige sin que lo pidas tú.
+// claramente difícil (hace falta más seguridad: es lo que más gasta), bajo para una claramente sencilla. Nunca
+// por encima de alto (muy alto, máximo…): gastan mucho límite y tardan, y eso no se elige sin que lo pidas tú.
 // `supported`: niveles del modelo (undefined = no se sabe; [] = el modelo no tiene niveles).
-export const EFFORT_CONFIDENCE = 0.6
+export const EFFORT_CONFIDENCE: Record<ModelTier, number> = { hard: 0.75, easy: 0.6 }
 export type AutoEffort = 'low' | 'medium' | 'high'
 export function pickEffort(tier: ModelTier | undefined, confidence: number | undefined, supported?: string[]): { effort?: string; level: AutoEffort; sure: boolean } {
-  const sure = !!tier && (confidence ?? 0) >= EFFORT_CONFIDENCE
+  const sure = !!tier && (confidence ?? 0) >= EFFORT_CONFIDENCE[tier]
   const level: AutoEffort = sure ? (tier === 'hard' ? 'high' : 'low') : 'medium'
   if (!supported || supported.includes(level)) return { effort: level, level, sure }
   if (supported.includes('medium')) return { effort: 'medium', level: 'medium', sure: false }

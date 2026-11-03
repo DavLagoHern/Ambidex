@@ -14,7 +14,7 @@ Arquitectura, modelo de datos y decisiones: [docs/ARCHITECTURE.md](docs/ARCHITEC
 
 ```bash
 npm install            # dependencias y node-pty compilado para Electron
-npm run dist           # compila y empaqueta "Ambidex.app" (firma ad hoc)
+npm run dist           # compila y empaqueta "Ambidex.app" (firma con tu identidad del llavero, o ad hoc)
 npm run install:app    # la copia a /Applications, crea un acceso en el Escritorio y la abre
 ```
 
@@ -46,11 +46,11 @@ Cada proyecto es una **pestaña** arriba, como en un navegador. Para abrir uno: 
 
 Siempre a mano: **modelo**, **razonamiento** y **permisos**. En «Auto» se ven los del último agente que respondió (no cambian mientras escribes): el motor decide al enviar.
 
-**Razonamiento automático:** por defecto **medio**. Jev solo lo sube a **alto** si ve clara una tarea difícil (confianza ≥ 60 %) y lo baja a **bajo** con una claramente sencilla. Los niveles por encima de alto (muy alto, máximo) gastan mucho límite: solo se usan si los eliges tú en la conversación. Se desactiva en Ajustes → Modelos.
+**Razonamiento automático:** por defecto **medio**. Jev solo lo sube a **alto** si ve clara una tarea difícil (seguridad ≥ 75 %) y lo baja a **bajo** con una claramente sencilla (≥ 60 %). Los niveles por encima de alto (muy alto, máximo) gastan mucho límite: solo se usan si los eliges tú en la conversación. Se desactiva en Ajustes → Modelos.
 
 **Sin límites** (Claude) y **Acceso total** (Codex) están siempre en el selector de permisos y se marcan en amarillo cuando están elegidos.
 
-**Cola:** si el agente está ocupado, lo que escribas se encola. Puedes editarlo, quitarlo o enviarlo ya; sale solo cuando el agente queda libre y sobrevive a reinicios.
+**Mientras trabaja:** tanto Claude Code como Codex reciben lo que escribas dentro del turno actual, sin pararlo. El mensaje aparece inmediatamente en una vista previa mientras se entrega. Si el turno ya está cerrándose, se conserva en la **cola**, que puedes editar, quitar o enviar ya y sobrevive a reinicios. En Ambos, si trabajan simultáneamente, cada uno recibe la tarea y el resultado del otro para coordinarse. Con el botón **+** (o ⌘↵) el mensaje sale como tarea aparte, en una conversación nueva.
 
 En el cuadro de texto:
 
@@ -98,7 +98,7 @@ En la misma consulta en que elige el agente, Jev (o Claude Haiku) clasifica el m
 | Claude Code | Claude Opus 5.5 | Claude Sonnet 5.5 |
 | Codex | GPT-6.1-Sol | GPT-6.1 Terra |
 
-- Si duda, no contesta a tiempo o el motor son las reglas, se usa el de las difíciles.
+- El de las difíciles solo se usa si Jev ve el mensaje difícil con una seguridad de al menos el 30 %. Si duda, no contesta a tiempo o el motor son las reglas, se usa el de las sencillas: sigue siendo muy capaz y gasta bastante menos.
 - Si fijas un modelo en el selector de la conversación (también antes del primer mensaje), manda el tuyo. «Auto» vuelve a elegirlo en cada mensaje.
 - Un modelo marcado que tu versión del CLI no ofrece no se elige, y Ajustes te avisa.
 
@@ -158,7 +158,7 @@ El motor es local, explícito y persistente (SQLite). Si cierras la app a mitad,
 
 ```bash
 npm run typecheck     # TypeScript estricto
-npm test              # 139 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
+npm test              # 153 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
 npm run build && npm run test:e2e          # E2E de la app real (Playwright) con los CLI reales
 npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales sobre un repositorio temporal
 ```
@@ -205,7 +205,7 @@ npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales s
 
 ## Limitaciones conocidas
 
-- **Jev con el modelo real:** instalado desde la app y verificado con SHA-256. Una prueba en español acertó (depurar, 80 %) en 711 ms, más lento que las decenas de milisegundos que anuncian sus autores pero dentro del margen del enrutado (1,2 s mientras escribes, 3 s al enviar). Su acierto con más mensajes aún no está medido, tampoco el de la dificultad, que se pregunta en la misma petición (no se ha medido cuánto tiempo añade).
+- **Jev con el modelo real:** instalado desde la app y verificado con SHA-256. Una prueba en español acertó (depurar, 80 %) en 711 ms, más lento que las decenas de milisegundos que anuncian sus autores pero dentro del margen del enrutado (1,2 s mientras escribes, 3 s al enviar). En la dificultad acertó 22 de 25 peticiones de prueba. Su acierto en el tipo de tarea con más mensajes aún no está medido, ni cuánto tiempo añade preguntar la dificultad en la misma petición.
 - **Visor web:** Google y otras webs pueden pedir un captcha o bloquear el inicio de sesión dentro de apps embebidas. Para eso, ⌘-clic abre el enlace en tu navegador.
 
 - **Aprobación de permisos en vivo:** los CLI se ejecutan en modo no interactivo. Lo que requiere permiso se deniega y se muestra en el chat con la forma de permitirlo (cambiar el modo de permisos). La aprobación interactiva necesitaría el protocolo de control de Claude y `codex app-server`, que Codex documenta como experimental.
@@ -216,7 +216,7 @@ npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales s
 - **Terminal en otra ventana:** al cambiar mucho de ancho, zsh redibuja su prompt y puede comerse las últimas líneas de la pantalla, como en cualquier terminal (la shell y su salida siguen ahí).
 - **Terminales:** se recrean al reabrir la app, pero sin su historial de pantalla.
 - **Monaco:** sin servidor de lenguaje, solo resaltado.
-- **Firma:** la `.app` lleva firma ad hoc, válida en tu Mac. Para distribuirla a otros haría falta un certificado de Apple.
+- **Firma:** la `.app` se firma con la primera identidad Apple Development / Developer ID del llavero (o `AMBIDEX_SIGN_IDENTITY`), así macOS recuerda sus permisos (p. ej. acceso a Documentos) entre builds; si no hay ninguna, firma ad hoc y macOS la trata como app nueva en cada build. Para distribuirla a otros haría falta un certificado de Apple.
 
 ## Licencia y avisos
 

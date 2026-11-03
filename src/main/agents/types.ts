@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentId, Permission } from '@shared/types'
+import type { AgentProcess, ProcessHandlers, ProcessSpec } from './runner'
 
 export interface RunRequest {
   cwd: string
@@ -16,6 +17,8 @@ export interface RunRequest {
   images?: string[]
   // continuar la sesión en una copia nueva (la original sigue abierta en otro sitio)
   fork?: boolean
+  // la entrada queda abierta para añadir mensajes durante el turno (ver Adapter.steer)
+  stream?: boolean
 }
 
 export interface Parser {
@@ -31,6 +34,12 @@ export interface Adapter {
   buildArgs(req: RunRequest): string[]
   // Lo que se escribe en stdin (por defecto, el texto tal cual)
   stdin?(text: string, req: RunRequest): string
+  // Admite mensajes nuevos mientras trabaja (Claude Code con entrada stream-json): devuelve lo que se escribe en
+  // stdin para añadir un mensaje al turno en curso; `turnEnded` dice si esa línea de stdout cierra el turno.
+  streams?(req: RunRequest): boolean
+  steer?(text: string, images?: string[]): string
+  turnEnded?(line: string): boolean
+  startProcess?(spec: ProcessSpec, req: RunRequest, handlers: ProcessHandlers): AgentProcess
   createParser(): Parser
   // Líneas de stderr que no aportan nada al usuario
   isNoise(stderrLine: string): boolean

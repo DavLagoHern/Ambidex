@@ -3,6 +3,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { AgentEvent, AgentLimits, AgentModel, CodexSandbox, LimitWindow } from '@shared/types'
 import { Adapter, parseJson, RunRequest, short } from './types'
+import { CodexLiveProcess } from './codex-live'
 
 const SANDBOXES: CodexSandbox[] = ['read-only', 'workspace-write', 'danger-full-access']
 
@@ -197,6 +198,7 @@ export function createCodexAdapter(home = codexHome()): Adapter {
 
     buildArgs(req: RunRequest) {
       const sandbox = SANDBOXES.includes(req.permission as CodexSandbox) ? (req.permission as CodexSandbox) : 'workspace-write'
+      if (req.stream) return ['app-server', '-c', `sandbox_mode="${sandbox}"`, ...(req.extra ?? [])]
       // `exec resume` no admite -s: el sandbox se fija con -c, que vale para ambos casos
       const common = ['--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`]
       if (req.model) common.push('-m', req.model)
@@ -208,6 +210,9 @@ export function createCodexAdapter(home = codexHome()): Adapter {
       // "-" = leer el prompt de stdin
       return req.resumeId ? ['exec', 'resume', ...common, req.resumeId, '-'] : ['exec', ...common, '-']
     },
+
+    streams: (req) => !req.schema,
+    startProcess: (spec, req, handlers) => new CodexLiveProcess(spec, req, handlers),
 
     createParser() {
       let threadId: string | undefined

@@ -1472,11 +1472,30 @@ button.sb-item:hover {
 
 /* git */
 .branch-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 2px 8px 8px;
 }
+/* El selector usa el ancho del panel, incluso si la columna es estrecha. */
+.branch-bar > .dropdown { position: static; }
+.branch-bar .branch-menu.menu.wide {
+  left: 8px;
+  right: 8px;
+  top: calc(100% - 4px);
+  min-width: 0;
+  max-width: none;
+  width: auto;
+  box-sizing: border-box;
+}
+.branch-menu .menu-item { min-width: 0; overflow: hidden; }
+.branch-menu .menu-item > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-menu .input { width: 100%; min-width: 0; box-sizing: border-box; }
+.branch-menu .menu-scroll { overflow-x: hidden; }
+.branch-menu .branch-menu-name { flex: 1; min-width: 0; }
+.branch-menu .branch-menu-name .ellipsis { min-width: 0; }
+.branch-menu .menu-item > .muted { flex-shrink: 0; white-space: nowrap; }
 .branch-btn {
   max-width: 100%;
   font-weight: 500;
@@ -5033,3 +5052,80 @@ button.sb-item:hover {
   .setup-summary { margin: 0 20px; }
   .setup-footer { padding: 20px; flex-wrap: wrap; }
 }
+
+/* Git: Preparados, Pendientes y Grafo se reparten el alto y cada uno desplaza lo suyo por dentro.
+   Plegar no cambia el orden: solo los plegados del final bajan al fondo (ver spacerAt en GitPanel). */
+.git-body { display: flex; flex-direction: column; }
+.git-body > * { flex-shrink: 0; }
+.git-body > .section.fill:not(.folded) { flex: 0 1 auto; min-height: 84px; display: flex; flex-direction: column; }
+.git-body > .section.fill > .section-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+/* el Grafo, que es largo, se queda con el sobrante */
+.git-body > .section.fill.graph:not(.folded) { flex: 1 1 auto; }
+.section-scroll.flush > .history-embedded { display: flex; flex-direction: column; height: 100%; }
+.section-scroll.flush { display: flex; flex-direction: column; overflow: hidden; }
+.history-embedded > .panel-tools { flex-shrink: 0; }
+.history-embedded > .history-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.section-header .section-icon { color: var(--text-3); flex-shrink: 0; }
+.section-header:hover .section-icon { color: var(--text-2); }
+/* sin ficheros, Cambios queda abajo con su contador a cero y sin desplegable */
+.git-body > .section.folded .count { opacity: 0.8; }
+
+/* Git panel: alturas estables (no dependen del puntero) y secciones distinguibles */
+/* cada sección pide su contenido y, si no cabe todo, encoge en proporción a lo que pide: la que tiene más
+   ficheros cede más y solo hay scroll cuando de verdad falta sitio. Worktrees, siempre al final. */
+.git-body > .section.fill:not(.folded) { flex: 0 1 auto; min-height: 0; }
+.git-body > .section.fill > .section-scroll { flex: 0 1 auto; min-height: 0; max-height: none; }
+.git-body > .section.fill.graph:not(.folded) { flex: 1 1 auto; min-height: 180px; }
+.git-body > .section.fill.graph > .section-scroll.flush { flex: 1 1 auto; height: auto; min-height: 0; }
+.git-body > .section.worktrees { order: 30; }
+.git-body .file-row { height: 26px; box-sizing: border-box; overflow: hidden; }
+.git-body .file-row .row-actions { height: 26px; }
+.git-body .file-row .row-actions .icon-btn { height: 22px; width: 22px; }
+.git-body > .section { border-top: 1px solid var(--border-strong); margin-top: 6px; }
+.git-body > .section:first-child { border-top: 0; margin-top: 0; }
+.git-body .section-header { background: var(--bg-surface); border-top: 0; height: 30px; }
+.git-body .section-header:hover { background: var(--bg-hover); }
+.git-body .section-header .count { background: transparent; border: 1px solid var(--border-strong); }
+.sec-staged > .section-header .section-icon { color: var(--green); }
+.sec-staged > .section-header .count { color: var(--green); border-color: #4ec27d55; }
+.sec-changes > .section-header .section-icon { color: var(--yellow); }
+.sec-changes > .section-header .count { color: var(--yellow); border-color: #e5b85c55; }
+.git-body .file-row { border-radius: 6px; }
+.git-body .file-row:hover { background: var(--bg-hover); }
+.commit-actions { flex-wrap: nowrap; gap: 6px; }
+.commit-actions .btn.primary { order: 0; flex: 1 1 auto; }
+.commit-actions .btn.icon-only { flex: none; width: 32px; padding: 0; justify-content: center; }
+.commit-actions .btn.icon-only.generate { color: var(--accent-text); }
+.section-toggle .section-icon { color: var(--text-3); flex-shrink: 0; }
+
+/* acciones de fila siempre visibles (no aparecen al pasar el ratón: así nada se desplaza ni se ensancha) */
+/* las de los ficheros solo en el que está abierto a la derecha (reservan su hueco, no mueven nada);
+   las de la cabecera (Preparados / Cambios) van siempre */
+.git-body .file-row .row-actions { display: inline-flex; visibility: hidden; flex-shrink: 0; }
+.git-body .file-row.active .row-actions { visibility: visible; }
+.git-body .section-header .row-actions { display: inline-flex; opacity: 1; }
+.git-body .file-row .file-name { min-width: 0; overflow: hidden; }
+.git-body .file-row .file-name > * { white-space: nowrap; }
+/* Repositorios: sección propia con su scroll; el borde inferior de cada lista se arrastra para cambiar su alto */
+.git-body > .section.sec-repos { flex: 0 0 auto; }
+.git-body .repos-scroll { max-height: 200px; overflow-y: auto; overflow-x: hidden; }
+.git-body .repos-scroll,
+.git-body > .section.fill > .section-scroll:not(.flush) { resize: vertical; }
+
+.git-body > .section.sec-commit { margin-bottom: 0; }
+.git-body > .section.sec-commit + .branch-bar { margin-top: 2px; }
+.git-body > .section.sec-commit .count { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* barra del diff: la ruta se recorta y los botones nunca se salen */
+.diff-bar { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.diff-bar > .mono { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.diff-bar > .row { flex-wrap: wrap; margin-left: auto; }
+.commit-box textarea { min-height: 0; resize: none; overflow-y: auto; line-height: 19px; }
+.git-body > .section.sec-commit { border-top: 1px solid var(--border-strong); }
+.send-btn.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--border-strong); }
+.send-btn.ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.git-body > .git-spacer { flex: 1 1 0; }
+
+/* Confirmación inmediata fuera del historial mientras se entrega el mensaje. */
+.send-preview { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; border-top: 1px solid var(--border); }
+.send-preview > .ellipsis { flex: 1; min-width: 0; }
+.send-preview > small { color: var(--muted); flex-shrink: 0; }

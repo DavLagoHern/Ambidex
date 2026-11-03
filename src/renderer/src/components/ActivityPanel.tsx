@@ -184,6 +184,7 @@ function FoldTitle({
       }
     >
       <Icon.chevronDown size={12} className="section-chevron" />
+      {panel === "agents" ? <Icon.bot size={12} className="section-icon" /> : <Icon.activity size={12} className="section-icon" />}
       <span>{label}</span>
       {folded && extra}
     </button>

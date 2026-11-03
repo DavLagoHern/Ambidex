@@ -49,7 +49,7 @@ export interface IpcContract {
   'sessions:delete': (id: string) => void
   'sessions:messages': (id: string) => ChatItem[]
   'sessions:search': (projectId: string, query: string) => SearchHit[]
-  'sessions:send': (id: string, prompt: string, context?: string, images?: string[]) => { runId: string }
+  'sessions:send': (id: string, prompt: string, context?: string, images?: string[]) => { runId?: string; steered?: boolean; queued?: boolean }
   // deshacer lo que cambió un turno en los ficheros: primero qué pasaría, luego hacerlo (siempre lo pide el usuario)
   'runs:undoPreview': (runId: string) => { files: UndoFile[]; overlapping: number }
   'runs:undo': (runId: string) => { restored: string[]; deleted: string[]; skipped: string[] }
@@ -131,7 +131,7 @@ export interface IpcContract {
     threadId: string,
     text: string,
     opts: { agent?: AgentId; context?: string; images?: string[]; models?: Partial<Record<AgentId, string>>; efforts?: Partial<Record<AgentId, string>> }
-  ) => { decision?: RouteDecision; sessionId?: string; queued?: boolean }
+  ) => { decision?: RouteDecision; sessionId?: string; queued?: boolean; steered?: boolean }
 
   'queue:list': (projectId: string) => QueuedMessage[]
   'queue:add': (m: { projectId: string; sessionId?: string; threadId?: string; prompt: string; context?: string; images?: string[] }) => QueuedMessage
@@ -140,8 +140,8 @@ export interface IpcContract {
   'attachments:read': (path: string) => string
   'queue:remove': (id: string) => void
   'queue:update': (id: string, prompt: string) => void
-  // con el destino ocupado, `interrupt` detiene el turno en curso y este mensaje sale el siguiente
-  'queue:sendNow': (id: string, interrupt?: boolean) => 'sent' | 'interrupting'
+  // añade al turno en curso sin cancelarlo
+  'queue:sendNow': (id: string) => 'sent'
 
   'orch:list': (projectId: string) => Orchestration[]
   'orch:get': (id: string) => Orchestration | undefined

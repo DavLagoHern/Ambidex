@@ -3,16 +3,69 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createInterface } from 'node:readline'
 
 const mode = process.env.FAKE_MODE || 'replay'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 let stdin = ''
+const appServer = process.argv[2] === 'app-server'
+const received = []
+const record = () => {
+  if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ argv: process.argv.slice(2), stdin, received, env: process.env }))
+}
+const rawOut = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+const threadId = 'fake-live-thread'
+const turnId = 'fake-live-turn'
+const emit = (d) => {
+  if (!appServer) return rawOut(d)
+  const p = { threadId, turnId }
+  if (d.type === 'thread.started') return
+  if (d.type === 'turn.started') return
+  if (d.type === 'turn.completed') {
+    const u = d.usage || {}
+    const total = { inputTokens: u.input_tokens || 0, cachedInputTokens: u.cached_input_tokens || 0, outputTokens: u.output_tokens || 0, reasoningOutputTokens: u.reasoning_output_tokens || 0 }
+    rawOut({ method: 'thread/tokenUsage/updated', params: { ...p, tokenUsage: { total, last: total } } })
+    return rawOut({ method: 'turn/completed', params: { ...p, turn: { id: turnId, status: 'completed' } } })
+  }
+  if (d.type.startsWith('item.')) {
+    const i = d.item
+    const names = { agent_message: 'agentMessage', command_execution: 'commandExecution', file_change: 'fileChange', mcp_tool_call: 'mcpToolCall', web_search: 'webSearch' }
+    return rawOut({ method: d.type.replace('.', '/'), params: { ...p, item: { ...i, type: names[i.type] || i.type, exitCode: i.exit_code, aggregatedOutput: i.aggregated_output } } })
+  }
+}
 process.stdin.setEncoding('utf8')
-process.stdin.on('data', (d) => (stdin += d))
-await new Promise((r) => process.stdin.on('end', r))
-
-if (process.env.FAKE_ARGS_FILE) writeFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ argv: process.argv.slice(2), stdin, env: process.env }))
+if (appServer) {
+  await new Promise((ready) => {
+    createInterface({ input: process.stdin }).on('line', (line) => {
+      const d = JSON.parse(line)
+      received.push(d)
+      if (d.method === 'initialize') rawOut({ id: d.id, result: {} })
+      if (['thread/start', 'thread/resume', 'thread/fork'].includes(d.method)) rawOut({ id: d.id, result: { thread: { id: threadId } } })
+      if (d.method === 'turn/start') {
+        stdin = d.params.input[0].text
+        record()
+        rawOut({ id: d.id, result: { turn: { id: turnId } } })
+        rawOut({ method: 'turn/started', params: { threadId, turn: { id: turnId } } })
+        ready()
+      }
+      if (d.method === 'turn/steer') {
+        record()
+        if (process.env.FAKE_REJECT_STEER) rawOut({ id: d.id, error: { code: -32000, message: 'Turn is no longer active' } })
+        else rawOut({ id: d.id, result: { turnId } })
+      }
+    })
+  })
+} else {
+  process.stdin.on('data', (d) => { stdin += d; record() })
+  const streaming = process.argv.includes('stream-json') && process.argv[process.argv.indexOf('--input-format') + 1] === 'stream-json'
+  await new Promise((r) => {
+    process.stdin.on('end', r)
+    if (streaming) process.stdin.on('data', () => stdin.includes('\n') && r())
+  })
+  record()
+}
+if (process.env.FAKE_HOLD_MS) await sleep(Number(process.env.FAKE_HOLD_MS))
 
 // cambia ficheros de la carpeta de trabajo, como haría el agente (null = borrar)
 if (process.env.FAKE_WRITE) for (const [f, c] of Object.entries(JSON.parse(process.env.FAKE_WRITE))) c === null ? rmSync(f, { force: true }) : writeFileSync(f, c)
@@ -20,7 +73,7 @@ if (process.env.FAKE_WRITE) for (const [f, c] of Object.entries(JSON.parse(proce
 if (mode === 'replay') {
   for (const line of readFileSync(process.env.FAKE_FIXTURE, 'utf8').split('\n')) {
     if (!line.trim()) continue
-    process.stdout.write(line + '\n')
+    emit(JSON.parse(line))
     await sleep(2)
   }
   process.exit(0)
@@ -35,18 +88,18 @@ if (mode === 'fail') {
 if (mode === 'hang') {
   // lanza un "nieto" (como un comando del agente) y se queda esperando
   const child = spawn('sleep', ['60'], { stdio: 'ignore' })
+  if (process.env.FAKE_STUBBORN) process.on('SIGTERM', () => {})
   writeFileSync(process.env.FAKE_PIDFILE, String(child.pid))
   process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'hang-session', model: 'fake' }) + '\n')
   process.stdout.write(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Trabajando' } } }) + '\n')
-  // ignora SIGTERM para comprobar la escalada a SIGKILL si FAKE_STUBBORN=1
-  if (process.env.FAKE_STUBBORN) process.on('SIGTERM', () => {})
+
   setInterval(() => {}, 1000)
 }
 
 if (mode === 'orch') {
   // Agente de equipo: responde en el formato del CLI que imita (Codex si argv empieza por "exec")
-  const codex = process.argv[2] === 'exec'
-  const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
+  const codex = appServer || process.argv[2] === 'exec'
+  const out = emit
   const reply = (text, structured) => {
     if (codex) {
       out({ type: 'thread.started', thread_id: 'fake-' + Math.random().toString(36).slice(2) })

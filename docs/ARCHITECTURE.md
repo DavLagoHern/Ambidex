@@ -207,13 +207,22 @@ las mismas restricciones que las reglas. Si Jev no contesta en 1,2 s (vista prev
 las reglas. Con **modelo según la dificultad** activo (Ajustes → Modelos, `settings.modelPolicy`), la misma
 petición lleva una tercera pregunta, `choice` entre `hard` y `easy`; también se pregunta si el agente lo eligió
 el usuario o con `@mención`. `pickModel` (en `router.ts`) elige entre los modelos permitidos de ese agente el de
-esa dificultad, sin elegir nunca uno que el CLI instalado no ofrezca; sin estimación, el de `hard`. El modelo va
+esa dificultad, sin elegir nunca uno que el CLI instalado no ofrezca; el de `hard` solo con dificultad `hard` y seguridad ≥ 0,3 (`HARD_MODEL_CONFIDENCE`); sin estimación o con duda, el de `easy`. El modelo va
 solo en ese turno (`SendOptions.model`): las sesiones del hilo no fijan modelo salvo que el usuario elija uno en el
-selector (o antes del primer mensaje, en `threads:send` `models`). El razonamiento sigue la misma idea (`pickEffort`, `modelPolicy.autoEffort`): medio por defecto, alto o bajo solo si la confianza de la dificultad es ≥ 0,6, nunca por encima de alto salvo que lo fije el usuario (`SendOptions.effort`, `threads:send` `efforts`). Las respuestas se cachean (la vista previa y el envío hacen la misma pregunta). El servidor se
+selector (o antes del primer mensaje, en `threads:send` `models`). El razonamiento sigue la misma idea (`pickEffort`, `modelPolicy.autoEffort`): medio por defecto, alto solo si la seguridad de «difícil» es ≥ 0,75 y bajo si la de «sencilla» es ≥ 0,6, nunca por encima de alto salvo que lo fije el usuario (`SendOptions.effort`, `threads:send` `efforts`). Las respuestas se cachean (la vista previa y el envío hacen la misma pregunta). El servidor se
 detiene tras 10 minutos sin uso (≈1 GB de memoria) y al salir de la app; si quedó huérfano tras un cierre
 inesperado, se detiene al volver a abrir. `Dispatcher` (proceso principal) crea
 una sesión por agente dentro de cada hilo y, al cambiar de agente, le pasa lo hablado con el otro. La cola
 de mensajes vive en SQLite y se procesa cuando la conversación queda libre.
+Claude Code se lanza con `--input-format stream-json` y la entrada abierta: un mensaje enviado mientras trabaja
+se escribe en su stdin (`SessionService.steer`) y lo incorpora en el siguiente paso del mismo turno; al llegar el
+`result` se cierra la entrada; los mensajes ya escritos se consumen antes de salir.
+Codex usa `app-server` para los chats: `initialize` → `thread/start`, `thread/resume` o `thread/fork` → `turn/start`.
+`codex-live.ts` traduce las notificaciones al parser compartido y confirma cada inyección con `turn/steer` y
+`expectedTurnId`. Los turnos con esquema siguen usando `exec --json`. Los mensajes que llegan al cerrar el turno
+se conservan en la cola; enviar nunca cancela el trabajo. En Ambos, si trabajan a la vez, reciben la tarea del
+compañero al arrancar y su resumen al finalizar. Es contexto compartido, no exclusión mutua de ficheros.
+El renderer muestra el envío de inmediato en una franja de vista previa, fuera del historial, hasta que el motor confirma su destino.
 
 **Actualización de los CLI** (`src/main/agents/updates.ts`): un minuto después de abrir y cada 6 horas, compara
 `--version` con los dist-tags de npm (`@anthropic-ai/claude-code` en el canal de `~/.claude/settings.json`,

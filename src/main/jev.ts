@@ -26,8 +26,8 @@ export const JEV_DIFFICULTY = DIFFICULTY_CRITERIA
 const CATEGORY_Q = 'The message is a request to an AI coding assistant. Which kind of task does it ask for?'
 const FOLLOWUP_Q =
   'Does the message continue or depend on the previous request in the conversation (like "yes, do it", "and now…", "the same for…") rather than start a new independent task?'
-const DIFFICULTY_Q =
-  'How demanding is the work the message asks an AI coding assistant to do? If the message continues the previous request, judge the work that request needs.'
+// Solo el mensaje: con «si continúa la petición anterior, juzga esa» un «haz commit» tras una tarea grande salía difícil
+const DIFFICULTY_Q = 'Classify the work this message asks an AI coding assistant to do. Judge only this message, not the project.'
 // por debajo de esta confianza el tipo de tarea no se usa (0 = reparto uniforme, 1 = seguro)
 const MIN_CONFIDENCE = 0.2
 

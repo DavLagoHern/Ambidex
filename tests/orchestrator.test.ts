@@ -179,7 +179,7 @@ describe('orquestador (agentes simulados con el formato real de cada CLI)', () =
 })
 
 describe('chat único con enrutado', () => {
-  it('reparte los mensajes, pasa el contexto del otro agente y encola si están ocupados', async () => {
+  it('reparte los mensajes, comparte contexto y añade información al turno ocupado', async () => {
     const s = setup({ FAKE_MODE: 'replay', FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl') })
     const t = s.dispatcher.createThread(s.project.id)
     const r1 = await s.dispatcher.sendThread(t.id, 'Planifica la estructura del módulo de pagos')
@@ -191,9 +191,9 @@ describe('chat único con enrutado', () => {
     // Codex recibe lo que se habló con Claude
     expect(codexFirst.context).toContain('Planifica la estructura')
     expect(codexFirst.route?.agent).toBe('codex')
-    // mientras Codex trabaja, otro mensaje para Codex espera en la cola y sale solo al terminar
+    // mientras Codex trabaja, la información adicional entra en su mismo turno
     const r3 = await s.dispatcher.sendThread(t.id, '@codex y añade un test')
-    expect(r3.queued).toBeTruthy()
+    expect(r3.steered).toBe(true)
     await waitFor(() => s.store.listQueue(s.project.id).length === 0, 10000)
     await waitFor(() => s.store.messages(r2.sessionId!).filter((i) => i.type === 'user').length === 2, 10000)
     expect(s.store.getThread(t.id)!.title).toBe('Planifica la estructura del módulo de pagos')

@@ -7,6 +7,8 @@ export interface ProcessSpec {
   cwd: string
   env: NodeJS.ProcessEnv
   stdin?: string
+  // no cerrar stdin al escribir: se podrán añadir mensajes (write) hasta endInput()
+  keepOpen?: boolean
 }
 
 export interface ExitInfo {
@@ -14,6 +16,21 @@ export interface ExitInfo {
   signal: NodeJS.Signals | null
   cancelled: boolean
   spawnError?: string
+}
+
+export interface ProcessHandlers {
+  onStdout: (line: string) => void
+  onStderr: (line: string) => void
+}
+
+export interface AgentProcess {
+  readonly pid: number | undefined
+  readonly done: Promise<ExitInfo>
+  readonly inputOpen: boolean
+  write(data: string): boolean
+  endInput(): void
+  cancel(graceMs?: number): Promise<void>
+  steer?(text: string, images?: string[]): Promise<boolean>
 }
 
 function lineSplitter(onLine: (line: string) => void) {
@@ -41,6 +58,7 @@ export class ManagedProcess {
   readonly done: Promise<ExitInfo>
   private cancelled = false
   private exited = false
+  inputOpen = false
 
   constructor(spec: ProcessSpec, handlers: { onStdout: (line: string) => void; onStderr: (line: string) => void }) {
     this.child = spawn(spec.bin, spec.args, {
@@ -57,8 +75,10 @@ export class ManagedProcess {
     this.child.stderr?.on('data', (d: string) => err.push(d))
     // EPIPE si el proceso muere antes de leer stdin: no es un error de la app
     this.child.stdin?.on('error', () => {})
-    if (spec.stdin !== undefined) this.child.stdin?.end(spec.stdin)
+    if (spec.keepOpen) this.child.stdin?.write(spec.stdin ?? '')
+    else if (spec.stdin !== undefined) this.child.stdin?.end(spec.stdin)
     else this.child.stdin?.end()
+    this.inputOpen = !!spec.keepOpen
 
     this.done = new Promise((resolve) => {
       let spawnError: string | undefined
@@ -78,6 +98,19 @@ export class ManagedProcess {
         resolve({ code, signal, cancelled: this.cancelled, spawnError })
       })
     })
+  }
+
+  // añade a la entrada abierta; false si ya se cerró
+  write(data: string): boolean {
+    if (!this.inputOpen || this.exited || !this.child.stdin?.writable) return false
+    this.child.stdin.write(data)
+    return true
+  }
+
+  endInput() {
+    if (!this.inputOpen) return
+    this.inputOpen = false
+    this.child.stdin?.end()
   }
 
   get pid() {

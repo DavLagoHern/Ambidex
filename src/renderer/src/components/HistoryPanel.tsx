@@ -75,7 +75,7 @@ export function HistoryList({ cwd: ws, embedded }: { cwd: string; embedded?: boo
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Todas
         </label>
       </div>
-      <div className={embedded ? '' : 'panel-body'}>
+      <div className={embedded ? 'history-list' : 'panel-body'}>
         {commits.length === 0 && <div className="empty small">Sin commits todavía.</div>}
         {commits.map((c, i) => {
           if (f && !`${c.subject} ${c.author} ${c.hash}`.toLowerCase().includes(f)) return null

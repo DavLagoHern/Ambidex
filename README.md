@@ -33,7 +33,7 @@ Ambidex is a macOS desktop app for building software with **Claude Code** and **
 - **Also included:**
   - a Monaco editor and terminals;
   - Git: multi-repo, staging, branches, conflicts, cherry-pick and revert, pull requests via `gh`;
-  - an editable message queue and `/prompts`;
+  - messages sent while Claude Code works join its current turn without stopping it (Codex queues them in an editable queue); **+** / ⌘↵ launches the message as a separate task, and `/prompts`;
   - the state of every project, restored when you reopen it.
 
 ## Install from source
@@ -48,21 +48,21 @@ Requirements:
 git clone https://github.com/DavLagoHern/Ambidex.git
 cd Ambidex
 npm install            # dependencies + node-pty built for Electron
-npm run dist           # builds and packages Ambidex.app (ad-hoc signed)
+npm run dist           # builds and packages Ambidex.app (signed with your keychain identity, or ad hoc)
 npm run install:app    # copies it to /Applications, adds a Desktop shortcut and opens it
 ```
 
 From then on it updates itself: when it opens (and every 6 hours) it runs `git pull --ff-only` in that same clone, builds the new version in the background and offers **Restart** (otherwise it installs when you quit). It never touches a clone with uncommitted changes or local commits; it tells you in **Ajustes → Agentes** instead. You can turn it off; the log is in `logs/update.log`.
 
-The app is ad-hoc signed, which is fine for a build made on your own Mac; there are no notarized downloads yet. If a CLI is not signed in, **Ajustes → Agentes y cuentas** opens its official login in a real terminal inside the app. For development, run `npm run dev`.
+The app is signed with the first Apple Development / Developer ID identity in your keychain (or `AMBIDEX_SIGN_IDENTITY`), so macOS remembers its permissions (such as Documents access) across rebuilds; without one it falls back to ad hoc, which macOS treats as a new app on every build. Either is fine for a build made on your own Mac; there are no notarized downloads yet. If a CLI is not signed in, **Ajustes → Agentes y cuentas** opens its official login in a real terminal inside the app. For development, run `npm run dev`.
 
 ## How it works
 
-- **CLIs as child processes.** The official CLIs run as `claude -p --output-format stream-json` and `codex exec --json`.
+- **CLIs as child processes.** Claude uses `claude -p` with bidirectional `stream-json`; Codex chats use `codex app-server` with `turn/steer` to accept input during active turns. Structured output jobs retain `codex exec --json`.
   - The prompt goes through stdin, and arguments are always arrays, never a shell string.
   - Every event is stored in SQLite before it reaches the UI, so a crash or reload loses nothing.
   - Cancelling stops the whole process group.
-- **Images.** Claude receives them as content blocks (`--input-format stream-json`) and Codex as `--image`. Only files from the app's own attachments folder can be sent.
+- **Images.** Claude receives them as content blocks (`--input-format stream-json`) and Codex as `localImage` input items (`--image` for structured output jobs). Only files from the app's own attachments folder can be sent.
 - **Web tools.** A tiny MCP server (streamable HTTP, `127.0.0.1` only) is added to each turn with `--mcp-config` for Claude and `-c mcp_servers.*` for Codex. Your CLI configuration files are never modified. Each turn gets its own token in an environment variable, and the token expires when the turn ends.
 - **Undo.** Snapshots are `git add -A` into a temporary copy of the index followed by `git write-tree`: no commits and no refs.
 - Architecture notes (in Spanish): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -102,7 +102,7 @@ The CLI adapters are tested against output captured from Claude Code 2.1.316 and
 - **Platform and language:** macOS on Apple Silicon only, and the UI is in Spanish.
 - **Permissions:** the CLIs run non-interactively, so anything that needs permission is denied, and the chat explains how to allow it. There is no live approval prompt.
 - **Undo:** only works in git repositories.
-- **Jev:** takes about 0.7 s per decision on an M-series Mac. If it doesn't answer in time, the rules decide and the hard-task model is used. How often it rates difficulty correctly has not been measured yet.
+- **Jev:** takes about 0.7 s per decision on an M-series Mac. If it doesn't answer in time, the rules decide and the simple-task model is used; the hard-task model needs Jev to rate the message hard with at least 30 % confidence. On a set of 25 sample requests it rated difficulty correctly in 22.
 - **CLI changes:** the output formats of the CLIs change often, and new versions may need adapter updates.
 
 ## Credits

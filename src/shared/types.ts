@@ -80,7 +80,7 @@ export type AgentEvent =
 // ---------- conversación ----------
 
 export type ChatItem =
-  | { id: string; type: 'user'; text: string; context?: string; route?: RouteDecision; images?: string[]; at: number }
+  | { id: string; type: 'user'; text: string; context?: string; route?: RouteDecision; images?: string[]; at: number; steering?: boolean }
   | { id: string; type: 'assistant'; text: string; streaming?: boolean; at?: number }
   | { id: string; type: 'thinking'; text: string; at?: number }
   | { id: string; type: 'tool'; toolId: string; name: string; input: string; status: 'running' | 'done' | 'error'; output?: string; at?: number }

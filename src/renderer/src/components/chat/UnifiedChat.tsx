@@ -9,7 +9,7 @@ import { PendingSend, SessionView, Target, usePS, useStore } from '../../lib/pro
 import { timeAgo } from '../../lib/utils'
 import { AgentLogo, Icon } from '../Icons'
 import {
-  AgentPills, ContextChip, ContextChipView, CopyButton, Elapsed, finalAnswer, messageText, QueueList, SentImages, TurnItems, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions,
+  AgentPills, ContextChip, ContextChipView, CopyButton, finalAnswer, messageText, QueueList, SentImages, TurnItems, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions,
   useModelLabel, Working
 } from './parts'
 import { TeamCard } from './TeamCard'
@@ -38,7 +38,7 @@ function buildTimeline(sessions: SessionView[], orchs: Orchestration[]): (Turn |
     const items = s.items ?? []
     const turns: Turn[] = []
     for (const it of items) {
-      if (it.type === 'user') turns.push({ kind: 'turn', key: it.id, at: it.at, session: s, user: it, items: [], last: false })
+      if (it.type === 'user' && (!it.steering || !turns.length)) turns.push({ kind: 'turn', key: it.id, at: it.at, session: s, user: it, items: [], last: false })
       else turns.at(-1)?.items.push(it)
     }
     if (turns.length) turns[turns.length - 1].last = true
@@ -106,20 +106,11 @@ function TurnView({ t }: { t: Turn }) {
 // Mensaje recién enviado: se ve ya, mientras el motor decide a quién va (antes de que exista el turno real)
 function PendingTurn({ p }: { p: PendingSend }) {
   return (
-    <div className="turn pending-turn">
-      <div className="msg-user-wrap">
-        <SentImages paths={p.images} />
-        <div className="msg-user">{p.text}</div>
-      </div>
-      <div className="reply">
-        <div className="working">
-          <span className="pulse" />
-          <span>Decidiendo quién se encarga…</span>
-          <span className="muted">
-            · <Elapsed since={p.at} />
-          </span>
-        </div>
-      </div>
+    <div className="send-preview" title={p.text} role="status">
+      {p.error ? <Icon.fail size={12} /> : <span className="pulse" />}
+      <span className="ellipsis">{p.text}</span>
+      <small title={p.error}>{p.error ? 'No confirmado' : 'Enviando…'}</small>
+      {p.error && <CopyButton text={p.text} className="icon-btn" title="Copiar el mensaje para recuperarlo" />}
     </div>
   )
 }
@@ -236,12 +227,14 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
   const session = agent === 'claude' ? claudeSession : agent === 'codex' ? codexSession : undefined
   // en Auto el mensaje solo espera en cola si los dos están ocupados (si no, va al libre)
   const busy = target === 'auto' ? !!(claudeSession?.running && codexSession?.running) : !!session?.running
-  const send = () => {
+  // Los dos agentes reciben información durante su turno.
+  const steer = busy
+  const send = (separate = false) => {
     const msg = messageText(text, att.paths)
     if (!msg) return
     if (target === 'team' && att.count) toast('El equipo trabaja con texto: las imágenes no se le envían', 'info')
     const pick = (k: 'model' | 'effort') => Object.fromEntries(Object.entries(pins).flatMap(([a, p]) => (p?.[k] ? [[a, p[k]]] : [])))
-    ps.sendUnified(msg, target, target === 'team' ? undefined : att.paths, pick('model'), pick('effort'))
+    ps.sendUnified(msg, target, target === 'team' ? undefined : att.paths, pick('model'), pick('effort'), { separate })
     setText('')
     att.clear()
   }
@@ -261,7 +254,9 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
             target === 'team'
               ? 'Describe la tarea para el equipo: qué quieres conseguir, alcance y criterios…'
               : busy
-                ? `${agent ? AGENT_NAMES[agent] : 'El agente'} está trabajando: tu mensaje quedará en cola`
+                ? steer
+                  ? `${AGENT_NAMES.claude} está trabajando: lo que escribas se le añade a lo que está haciendo`
+                  : `${agent ? AGENT_NAMES[agent] : 'El agente'} está trabajando: tu mensaje quedará en cola`
                 : 'Escribe a Claude y Codex…  @ ficheros o agentes · / tus prompts'
           }
           onChange={(e) => (setText(e.target.value), mentions.trackCaret())}
@@ -271,7 +266,7 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
             if (mentions.onKeyDown(e)) return
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
-              send()
+              send(e.metaKey || e.ctrlKey)
             }
           }}
         />
@@ -330,13 +325,18 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
               <Icon.stop size={12} />
             </button>
           )}
+          {busy && target !== 'team' && (
+            <button className="send-btn ghost" disabled={!text.trim() && !att.count} onClick={() => send(true)} title="Lanzar como tarea aparte, en una conversación nueva (⌘↵)">
+              <Icon.plus size={15} />
+            </button>
+          )}
           <button
             className={`send-btn ${target === 'team' ? 'both' : agent ? `agent-${agent}` : 'both'}`}
             disabled={!text.trim() && !att.count}
-            onClick={send}
-            title={target === 'team' ? 'Encargar al equipo (↵)' : busy ? 'Poner en cola (↵)' : 'Enviar (↵)'}
+            onClick={() => send()}
+            title={target === 'team' ? 'Encargar al equipo (↵)' : steer ? 'Añadir a lo que está haciendo, sin pararlo (↵)' : busy ? 'Añadir información al turno actual (↵)' : 'Enviar (↵)'}
           >
-            {busy ? <Icon.clock size={14} /> : <Icon.up size={15} />}
+            {busy && !steer ? <Icon.clock size={14} /> : <Icon.up size={15} />}
           </button>
         </div>
       </div>
@@ -436,7 +436,7 @@ export function UnifiedChat() {
       allPending.filter(
         (p) =>
           (p.threadId === threadId || p.threadId === null) &&
-          !timeline.some((e) => e.kind === 'turn' && e.user.at >= p.at - 2000 && (e.user.text === p.text || e.user.text === stripMention(p.text)))
+          !timeline.some((e) => e.kind === 'turn' && [e.user, ...e.items].some((i) => i.type === 'user' && i.at >= p.at - 2000 && (i.text === p.text || i.text === stripMention(p.text))))
       ),
     [allPending, timeline, threadId]
   )
@@ -472,12 +472,10 @@ export function UnifiedChat() {
         >
           <div className="chat-inner">
             {timeline.map((e) => (e.kind === 'turn' ? <TurnView key={e.key} t={e} /> : <TeamEntryView key={e.key} o={e.o} />))}
-            {pending.map((p) => (
-              <PendingTurn key={p.id} p={p} />
-            ))}
           </div>
         </div>
       )}
+      {pending.map((p) => <PendingTurn key={p.id} p={p} />)}
       <QueueList items={myQueue} />
       <UnifiedComposer threadId={threadId} />
     </div>

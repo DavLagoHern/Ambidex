@@ -6,8 +6,8 @@ import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentEvent, AgentId, ChatItem, RouteDecision, RunInfo, RunStatus, SessionMeta, SessionTotals } from '@shared/types'
 import { finalizeTurn, reduceEvent, titleFromPrompt } from '@shared/chat'
 import type { Store } from '../db/store'
-import type { Adapter, Parser } from './types'
-import { killGroup, ManagedProcess, pidMatches } from './runner'
+import type { Adapter, Parser, RunRequest } from './types'
+import { killGroup, ManagedProcess, pidMatches, type AgentProcess, type ProcessHandlers, type ProcessSpec } from './runner'
 
 export interface ServiceDeps {
   // variables de entorno propias de cada agente (p. ej. el tope de contexto de Claude Code)
@@ -42,7 +42,7 @@ interface ActiveRun {
   agent: AgentId
   cwd: string
   startedAt: number
-  proc?: ManagedProcess
+  proc?: AgentProcess
   items: ChatItem[] // turno actual, empezando por el mensaje del usuario
   seqOf: Map<string, number>
   nextSeq: number
@@ -51,6 +51,9 @@ interface ActiveRun {
   uiTimer?: NodeJS.Timeout
   dbTimer?: NodeJS.Timeout
   stderrTail: string
+  pendingCoordination: string[]
+  ready: Promise<void>
+  resolveReady: () => void
   totals: SessionTotals
   lastText: string
   structured?: unknown
@@ -156,11 +159,15 @@ export class SessionService {
       allowedTools: opts.allowedTools || tools?.allowedTools ? [...(opts.allowedTools ?? []), ...(tools?.allowedTools ?? [])] : undefined,
       images: images.length ? images : undefined,
       fork: !!session.agentSessionId && !!this.d.forkIfLive?.(session.agent, session.agentSessionId)
-    }
+    } as RunRequest
+    // los comandos («/compact») van como texto; el resto, con la entrada abierta si el agente lo admite
+    req.stream = !prompt.startsWith('/') && !!adapter.streams?.(req)
     const args = adapter.buildArgs(req)
     const text = context ? `${prompt}\n\n${context}` : prompt
     let resolve!: (o: RunOutcome) => void
     const done = new Promise<RunOutcome>((r) => (resolve = r))
+    let resolveReady!: () => void
+    const ready = new Promise<void>((r) => (resolveReady = r))
 
     const run: ActiveRun = {
       id: runId,
@@ -175,6 +182,9 @@ export class SessionService {
       dirtyUi: new Map(),
       dirtyDb: new Map(),
       stderrTail: '',
+      pendingCoordination: [],
+      ready,
+      resolveReady,
       totals: { ...session.totals },
       lastText: '',
       schemaFile: schema?.file,
@@ -198,7 +208,7 @@ export class SessionService {
     const parser = adapter.createParser()
     const start = () => {
       if (run.cancelled) return this.finish(run, { code: null, signal: null, cancelled: true })
-      this.startProcess(run, parser, { bin, args, cwd: session.cwd, stdin: adapter.stdin ? adapter.stdin(text, req) : text, env: { ...this.d.agentEnv?.(session.agent), ...tools?.env } }, adapter)
+      this.startProcess(run, parser, { bin, args, cwd: session.cwd, keepOpen: req.stream, stdin: adapter.stdin ? adapter.stdin(text, req) : text, env: { ...this.d.agentEnv?.(session.agent), ...tools?.env } }, adapter, req)
     }
     // foto de cómo están los ficheros antes de que el agente toque nada
     if (this.d.checkpoint)
@@ -211,29 +221,33 @@ export class SessionService {
     return { runId, done }
   }
 
-  private startProcess(run: ActiveRun, parser: Parser, spec: { bin: string; args: string[]; cwd: string; stdin: string; env?: Record<string, string> }, adapter: Adapter) {
+  private startProcess(run: ActiveRun, parser: Parser, spec: { bin: string; args: string[]; cwd: string; stdin: string; keepOpen?: boolean; env?: Record<string, string> }, adapter: Adapter, req: RunRequest) {
     const { store } = this.d
     const runId = run.id
     try {
-      run.proc = new ManagedProcess(
-        { bin: spec.bin, args: spec.args, cwd: spec.cwd, stdin: spec.stdin, env: { ...this.d.env(), ...spec.env } },
-        {
-          onStdout: (line) => {
-            if (!line.includes('"content_block_delta"')) store.appendLog(runId, 'event', line)
-            for (const ev of parser.onLine(line)) this.apply(run, ev)
-          },
-          onStderr: (line) => {
-            store.appendLog(runId, 'stderr', line)
-            if (!adapter.isNoise(line)) run.stderrTail = (run.stderrTail + line + '\n').slice(-4000)
-          }
+      const processSpec: ProcessSpec = { bin: spec.bin, args: spec.args, cwd: spec.cwd, stdin: spec.stdin, keepOpen: spec.keepOpen, env: { ...this.d.env(), ...spec.env } }
+      const handlers: ProcessHandlers = {
+        onStdout: (line) => {
+          if (!line.includes('"content_block_delta"')) store.appendLog(runId, 'event', line)
+          for (const ev of parser.onLine(line)) this.apply(run, ev)
+          // EOF conserva los mensajes ya escritos; Claude los consume antes de salir.
+          if (spec.keepOpen && adapter.turnEnded?.(line)) run.proc?.endInput()
+        },
+        onStderr: (line) => {
+          store.appendLog(runId, 'stderr', line)
+          if (!adapter.isNoise(line)) run.stderrTail = (run.stderrTail + line + '\n').slice(-4000)
         }
-      )
+      }
+      run.proc = req.stream && adapter.startProcess ? adapter.startProcess(processSpec, req, handlers) : new ManagedProcess(processSpec, handlers)
     } catch (e) {
       this.finish(run, { code: null, signal: null, cancelled: false, spawnError: (e as Error).message })
       return
     }
+    run.resolveReady()
     if (run.proc.pid) store.setRunPid(runId, run.proc.pid)
     this.d.push('run:status', this.runInfo(run, 'running'))
+    // Si el compañero arrancó durante la foto inicial, entrega su aviso al abrir la entrada.
+    for (const message of run.pendingCoordination.splice(0)) void this.steer(run.sessionId, message, undefined, undefined, true).catch(() => false)
 
     run.proc.done.then(async (exit) => {
       try {
@@ -254,6 +268,44 @@ export class SessionService {
     if (!s.agentSessionId) throw new Error('Esta conversación aún no tiene nada que compactar')
     if (this.active.has(sessionId)) throw new Error('Espera a que termine el turno en curso')
     return this.send(sessionId, '/compact', undefined, { display: 'Compactar la conversación' })
+  }
+
+  // Añade información al turno en curso sin cancelarlo. Solo se persiste si el transporte la acepta.
+  async steer(sessionId: string, prompt: string, context?: string, images?: string[], internal = false): Promise<boolean> {
+    const run = this.active.get(sessionId)
+    const session = this.d.store.getSession(sessionId)
+    if (!run || !session) return false
+    if (!run.proc && internal && !run.cancelled) { run.pendingCoordination.push(prompt); return true }
+    if (!run.proc) await run.ready
+    if (this.active.get(sessionId) !== run || !run.proc?.inputOpen) return false
+    const adapter = this.d.adapters[session.agent]
+    if ((!adapter.steer && !run.proc.steer) || !prompt.trim()) return false
+    const imgs = (images ?? []).slice(0, 10).map((p) => {
+      if (!this.d.checkImage) throw new Error('Esta conversación no admite imágenes')
+      return this.d.checkImage(p)
+    })
+    const text = context ? `${prompt}\n\n${context}` : prompt
+    const accepted = run.proc.steer
+      ? await run.proc.steer(text, imgs.length ? imgs : undefined)
+      : run.proc.write(adapter.steer!(text, imgs.length ? imgs : undefined))
+    if (!accepted) return false
+    if (!internal) {
+      const user: ChatItem = { id: randomUUID(), type: 'user', text: prompt, context: context || undefined, images: imgs.length ? imgs : undefined, at: Date.now(), steering: true }
+      this.track(run, [user], true)
+      this.flushUi(run)
+    }
+    return true
+  }
+
+  // Incluye los cambios aún pendientes de persistir para coordinar turnos simultáneos.
+  coordinationSnapshot(sessionId: string) {
+    const run = this.active.get(sessionId)
+    const items = run?.items ?? this.d.store.messages(sessionId)
+    const firstRequest = items.find((i) => i.type === 'user')
+    const request = [...items].reverse().find((i) => i.type === 'user')
+    const answer = [...items].reverse().find((i) => i.type === 'assistant')
+    const files = [...new Set(items.flatMap((i) => i.type === 'files' ? i.files.map((f) => f.path) : []))]
+    return [firstRequest?.type === 'user' && firstRequest !== request ? `Tarea inicial: ${firstRequest.text.slice(0, 1200)}` : '', request?.type === 'user' ? `Petición: ${request.text.slice(0, 1600)}` : '', answer?.type === 'assistant' ? `Última respuesta: ${answer.text.slice(-1600)}` : '', files.length ? `Ficheros tocados: ${files.slice(-30).join(', ')}` : ''].filter(Boolean).join('\n')
   }
 
   async cancel(sessionId: string) {
@@ -334,6 +386,7 @@ export class SessionService {
 
   private finish(run: ActiveRun, exit: { code: number | null; signal: NodeJS.Signals | null; cancelled: boolean; spawnError?: string }) {
     const { store } = this.d
+    run.resolveReady()
     const now = Date.now()
     const changed = finalizeTurn(run.items, exit.cancelled)
     const hasError = run.items.some((i) => i.type === 'error')

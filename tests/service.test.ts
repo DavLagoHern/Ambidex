@@ -92,7 +92,8 @@ describe('SessionService', () => {
 
     // el prompt va por stdin, nunca como argumento
     const call = JSON.parse(readFileSync(argsFile, 'utf8'))
-    expect(call.stdin).toBe('-v Lee a.txt')
+    // Claude va con la entrada stream-json abierta: el texto llega dentro del mensaje JSON
+    expect(JSON.parse(call.stdin).message.content[0].text).toBe('-v Lee a.txt')
     expect(call.argv).not.toContain('-v Lee a.txt')
     expect(call.argv).toEqual(expect.arrayContaining(['--permission-mode', 'plan', '--model', 'opus']))
 
@@ -135,7 +136,9 @@ describe('SessionService', () => {
     const s = store.createSession(project.id, project.path, { agent: 'codex' })
     service.send(s.id, 'hola')
     await waitFor(() => finished.length === 1)
-    expect(JSON.parse(readFileSync(argsFile, 'utf8')).argv).toEqual(expect.arrayContaining(['-m', 'gpt-6-sol']))
+    const call = JSON.parse(readFileSync(argsFile, 'utf8'))
+    expect(call.argv[0]).toBe('app-server')
+    expect(call.received.find((r: any) => r.method === 'turn/start').params.model).toBe('gpt-6-sol')
     expect(store.messages(s.id).filter((i) => i.type === 'assistant').map((i) => (i as { text: string }).text)).toEqual([
       'Voy a leer a.txt y convertir su contenido a mayúsculas.',
       'HOLA'
@@ -234,7 +237,65 @@ describe('contexto adjunto', () => {
     const s = store.createSession(project.id, project.path, { agent: 'claude' })
     service.send(s.id, 'Explica esto', '<contexto>src/a.ts líneas 1-3</contexto>')
     await waitFor(() => finished.length === 1)
-    expect(JSON.parse(readFileSync(argsFile, 'utf8')).stdin).toBe('Explica esto\n\n<contexto>src/a.ts líneas 1-3</contexto>')
+    expect(JSON.parse(JSON.parse(readFileSync(argsFile, 'utf8')).stdin).message.content[0].text).toBe('Explica esto\n\n<contexto>src/a.ts líneas 1-3</contexto>')
     expect(store.messages(s.id)[0]).toMatchObject({ type: 'user', text: 'Explica esto', context: '<contexto>src/a.ts líneas 1-3</contexto>' })
+  })
+})
+
+
+describe('entrada durante un turno', () => {
+  it.each(['claude', 'codex'] as const)('%s recibe información adicional sin cancelar ni crear otra ejecución', async (agent) => {
+    const argsFile = join(tmpDir(), 'args.json')
+    const { store, service, project, finished } = setup({ FAKE_FIXTURE: join(FIXTURES, `${agent}-stream.jsonl`), FAKE_ARGS_FILE: argsFile, FAKE_HOLD_MS: '300' })
+    const s = store.createSession(project.id, project.path, { agent })
+    const run = service.send(s.id, 'tarea larga')
+    await waitFor(() => { try { return !!readFileSync(argsFile, 'utf8') } catch { return false } })
+    expect(await service.steer(s.id, 'también revisa esto', '<contexto>extra</contexto>')).toBe(true)
+    const result = await run.done
+    expect(result.status).toBe('completed')
+    expect(finished).toEqual(['completed'])
+    expect(store.recentRuns(project.id, 10)).toHaveLength(1)
+    expect(store.messages(s.id).filter((i) => i.type === 'user').map((i: any) => i.text)).toEqual(['tarea larga', 'también revisa esto'])
+    const call = JSON.parse(readFileSync(argsFile, 'utf8'))
+    if (agent === 'codex') {
+      const steer = call.received.find((r: any) => r.method === 'turn/steer')
+      expect(steer.params).toMatchObject({ expectedTurnId: 'fake-live-turn', input: [{ type: 'text', text: 'también revisa esto\n\n<contexto>extra</contexto>' }] })
+      expect(call.received.filter((r: any) => r.method === 'turn/start')).toHaveLength(1)
+      expect(call.received.some((r: any) => r.method === 'turn/interrupt')).toBe(false)
+    } else expect(call.stdin.split('\n').filter(Boolean).map((line: string) => JSON.parse(line).message.content[0].text)).toEqual(['tarea larga', 'también revisa esto\n\n<contexto>extra</contexto>'])
+    expect(await service.steer(s.id, 'demasiado tarde')).toBe(false)
+  })
+
+  it('acepta la entrada que llega mientras se prepara el inicio del agente', async () => {
+    const argsFile = join(tmpDir(), 'args.json')
+    let release!: (value: string | null) => void
+    let first = true
+    const checkpoint = () => {
+      if (!first) return Promise.resolve(null)
+      first = false
+      return new Promise<string | null>((resolve) => { release = resolve })
+    }
+    const { store, service, project } = setup({ FAKE_FIXTURE: join(FIXTURES, 'codex-stream.jsonl'), FAKE_ARGS_FILE: argsFile, FAKE_HOLD_MS: '300' }, { checkpoint })
+    const s = store.createSession(project.id, project.path, { agent: 'codex' })
+    const run = service.send(s.id, 'tarea inicial')
+    expect(await service.steer(s.id, 'Claude también trabaja', undefined, undefined, true)).toBe(true)
+    const extra = service.steer(s.id, 'información adicional')
+    release(null)
+    expect(await extra).toBe(true)
+    await run.done
+    const call = JSON.parse(readFileSync(argsFile, 'utf8'))
+    expect(call.received.filter((r: any) => r.method === 'turn/steer').map((r: any) => r.params.input[0].text)).toEqual(['Claude también trabaja', 'información adicional'])
+    expect(store.messages(s.id).filter((i) => i.type === 'user')).toHaveLength(2)
+  })
+
+  it('no guarda como enviado un mensaje que Codex rechaza', async () => {
+    const argsFile = join(tmpDir(), 'args.json')
+    const { store, service, project } = setup({ FAKE_FIXTURE: join(FIXTURES, 'codex-stream.jsonl'), FAKE_ARGS_FILE: argsFile, FAKE_HOLD_MS: '300', FAKE_REJECT_STEER: '1' })
+    const s = store.createSession(project.id, project.path, { agent: 'codex' })
+    const run = service.send(s.id, 'tarea larga')
+    await waitFor(() => { try { return !!readFileSync(argsFile, 'utf8') } catch { return false } })
+    expect(await service.steer(s.id, 'nuevo dato')).toBe(false)
+    await run.done
+    expect(store.messages(s.id).filter((i) => i.type === 'user')).toHaveLength(1)
   })
 })

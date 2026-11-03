@@ -47,6 +47,8 @@ export interface ThreadSendResult {
   decision?: RouteDecision
   sessionId?: string
   queued?: QueuedMessage
+  // añadido al turno en curso (sin pararlo)
+  steered?: boolean
 }
 
 // Chat único con dos agentes (enrutado) y colas de mensajes
@@ -173,14 +175,14 @@ export class Dispatcher {
     let out = d
     if (this.policy().auto) {
       const pinned = session?.model || pins?.models?.[d.agent]
-      const pick = pinned ? undefined : pickModel(d.agent, cls?.tier, this.policy(), models?.length ? models.map((m) => m.id) : undefined)
+      const pick = pinned ? undefined : pickModel(d.agent, cls?.tier, this.policy(), models?.length ? models.map((m) => m.id) : undefined, cls?.tierConfidence)
       if (pinned) out = { ...out, model: pinned, reason: `${out.reason} · ${label(pinned)} (fijado en la conversación)` }
       else if (pick)
         out = {
           ...out,
           model: pick.model,
           tier: pick.tier,
-          reason: `${out.reason} · ${label(pick.model)} (${pick.guessed ? 'dificultad sin estimar' : `tarea ${TIER_LABELS[pick.tier]}${pct(cls?.tierConfidence)}`})`
+          reason: `${out.reason} · ${label(pick.model)} (${pick.guessed ? (cls?.tier ? `tarea ${TIER_LABELS[cls.tier]}${pct(cls.tierConfidence)}, poco segura` : 'dificultad sin estimar') : `tarea ${TIER_LABELS[pick.tier]}${pct(cls?.tierConfidence)}`})`
         }
     }
     if (cls?.tierConfidence !== undefined) out = { ...out, tierConfidence: cls.tierConfidence }
@@ -198,7 +200,7 @@ export class Dispatcher {
     const pick = pickEffort(cls?.tier, cls?.tierConfidence, info ? info.efforts : undefined)
     if (!pick.effort) return d
     // si no subió/bajó, por qué: sin estimar o con poca seguridad
-    const why = pick.sure ? '' : cls?.tier ? ` (seguridad${pct(cls.tierConfidence)}, hace falta ${Math.round(EFFORT_CONFIDENCE * 100)} %)` : ' (por defecto)'
+    const why = pick.sure ? '' : cls?.tier ? ` (seguridad${pct(cls.tierConfidence)}, hace falta ${Math.round(EFFORT_CONFIDENCE[cls.tier] * 100)} %)` : ' (por defecto)'
     return { ...d, effort: pick.effort, reason: `${d.reason} · razonamiento ${name(pick.effort)}${why}` }
   }
 
@@ -246,6 +248,12 @@ export class Dispatcher {
     return `<conversacion_previa>\nEn esta conversación también participa ${otherName}. Esto es lo que se habló con él desde tu última respuesta (lo que cambió está en los ficheros: léelos si lo necesitas):\n\n${body}${olderNote}\n</conversacion_previa>`
   }
 
+  private parallelContext(thread: ThreadMeta, agent: AgentId): string {
+    const other = this.sessionOf(thread, agent === 'claude' ? 'codex' : 'claude')
+    if (!other?.running) return ''
+    return `<agente_en_paralelo>\n${AGENT_NAMES[other.agent]} está trabajando ahora en esta misma conversación y carpeta.\n${this.d.service.coordinationSnapshot?.(other.id) ?? ''}\nCoordina tu tarea con ese trabajo: revisa los cambios actuales antes de editar, conserva los cambios del otro y evita duplicar su tarea. Esta información es una instantánea, no un bloqueo de ficheros.\n</agente_en_paralelo>`
+  }
+
   private ensureSession(thread: ThreadMeta, agent: AgentId, pinned?: { model?: string; effort?: string }): SessionMeta {
     const existing = this.sessionOf(thread, agent)
     if (existing) return existing
@@ -271,13 +279,16 @@ export class Dispatcher {
     text: string,
     opts: { agent?: AgentId; context?: string; images?: string[]; models?: Pins; efforts?: Pins; fromQueue?: boolean } = {}
   ): Promise<ThreadSendResult> {
-    const thread = this.d.store.getThread(threadId)
+    let thread = this.d.store.getThread(threadId)
     if (!thread) throw new Error('Conversación no encontrada')
     const decision = await this.decide(thread, text, opts.agent, { models: opts.models, efforts: opts.efforts })
+    thread = this.d.store.getThread(threadId) ?? thread
     const target = this.sessionOf(thread, decision.agent)
     // si el agente elegido está ocupado (o los dos), el mensaje espera en la cola del hilo
     if (target?.running) {
       if (opts.fromQueue) return { decision }
+      // Los dos agentes admiten entrada durante el turno; el transporte confirma la entrega.
+      if (await this.d.service.steer(target.id, text, opts.context, opts.images)) return { decision, sessionId: target.id, steered: true }
       const queued = this.d.store.enqueue({
         projectId: thread.projectId,
         threadId,
@@ -287,13 +298,22 @@ export class Dispatcher {
         agent: decision.method === 'rules' ? undefined : decision.agent
       })
       this.pushQueue(thread.projectId)
+      // Si acabó mientras se intentaba enviar, no dejamos el mensaje esperando para siempre.
+      if (!this.d.service.isRunning(target.id)) void this.onIdle(this.d.store.getSession(target.id)!)
       return { queued, decision }
     }
     const session = this.ensureSession(thread, decision.agent, { model: opts.models?.[decision.agent], effort: opts.efforts?.[decision.agent] })
+    thread = this.d.store.getThread(threadId) ?? thread
     const cross = this.crossContext(thread, decision.agent)
-    const context = [cross, opts.context].filter(Boolean).join('\n\n') || undefined
+    const context = [cross, this.parallelContext(thread, decision.agent), opts.context].filter(Boolean).join('\n\n') || undefined
     const prompt = text.replace(/^@(claude|codex)\b\s*/i, '') || text
     this.d.service.send(session.id, prompt, context, { route: decision, images: opts.images, model: decision.model, effort: decision.effort })
+    // El agente que ya estaba trabajando también recibe la tarea del que acaba de entrar.
+    const other = this.sessionOf(thread, decision.agent === 'claude' ? 'codex' : 'claude')
+    if (other?.running) {
+      const state = this.parallelContext(this.d.store.getThread(threadId)!, other.agent)
+      if (state) void Promise.resolve(this.d.service.steer(other.id, state, undefined, undefined, true)).catch(() => false)
+    }
     const updated = this.d.store.updateThread(threadId, {
       title: thread.title === NEW_TITLE ? titleFromPrompt(prompt) : undefined,
       updatedAt: Date.now()
@@ -324,9 +344,8 @@ export class Dispatcher {
     this.pushQueue(q.projectId)
   }
 
-  // «Enviar ya» un mensaje de la cola. Con el destino libre sale en el acto. Ocupado: sin `interrupt` se avisa; con él,
-  // el mensaje pasa a ser el primero de la cola y se detiene el turno en curso: al pararse, sale este (onIdle).
-  async sendNow(id: string, interrupt = false): Promise<'sent' | 'interrupting'> {
+  // «Enviar ya» añade al turno activo o inicia el siguiente si ya está libre. Nunca lo cancela.
+  async sendNow(id: string): Promise<'sent'> {
     const q = this.d.store.getQueued(id)
     if (!q) throw new Error('Ese mensaje ya no está en la cola')
     let busy: string | undefined
@@ -341,25 +360,35 @@ export class Dispatcher {
       busy = r.decision && thread?.sessions[r.decision.agent]
     } else if (q.sessionId) {
       if (!this.d.service.isRunning(q.sessionId)) {
+        this.d.service.send(q.sessionId, q.prompt, q.context, { images: q.images })
         this.d.store.removeQueued(id)
         this.pushQueue(q.projectId)
-        this.d.service.send(q.sessionId, q.prompt, q.context, { images: q.images })
         return 'sent'
       }
       busy = q.sessionId
     }
     if (!busy) throw new Error('No se pudo enviar el mensaje')
-    if (!interrupt) throw new Error('El agente sigue trabajando; se enviará cuando termine')
-    this.d.store.moveQueuedToFront(id)
-    this.pushQueue(q.projectId)
-    await this.d.service.cancel(busy)
-    return 'interrupting'
+    // si el agente admite mensajes a mitad de turno, entra en lo que está haciendo (sin pararlo)
+    if (await this.d.service.steer(busy, q.prompt, q.context, q.images)) {
+      this.d.store.removeQueued(id)
+      this.pushQueue(q.projectId)
+      return 'sent'
+    }
+    throw new Error('El turno ya está terminando: el mensaje sigue en cola y se enviará a continuación')
   }
 
   // Una conversación ha quedado libre: siguiente mensaje de su cola
   async onIdle(session: SessionMeta) {
     try {
       if (session.threadId) {
+        const thread = this.d.store.getThread(session.threadId)
+        const other = thread && this.sessionOf(thread, session.agent === 'claude' ? 'codex' : 'claude')
+        if (other?.running) {
+          const summary = this.d.service.coordinationSnapshot?.(session.id) ?? ''
+          const last = this.d.store.recentRuns(session.projectId, 200).find((r) => r.sessionId === session.id)
+          const status = last?.status === 'failed' ? 'con error' : last?.status === 'cancelled' || last?.status === 'interrupted' ? 'interrumpida' : 'finalizada'
+          await Promise.resolve(this.d.service.steer(other.id, `<agente_en_paralelo>\n${AGENT_NAMES[session.agent]} tiene su ejecución ${status} en esta conversación.\n${summary}\nRevisa los ficheros actuales antes de continuar y conserva su trabajo.\n</agente_en_paralelo>`, undefined, undefined, true)).catch(() => false)
+        }
         // los dos agentes del hilo pueden quedar libres a la vez: un solo procesado
         const key = session.threadId
         if (this.processing.has(key)) return
@@ -377,9 +406,9 @@ export class Dispatcher {
       } else if (!session.orchestrationId) {
         const next = this.d.store.nextQueued({ sessionId: session.id })
         if (!next) return
+        this.d.service.send(session.id, next.prompt, next.context, { images: next.images })
         this.d.store.removeQueued(next.id)
         this.pushQueue(session.projectId)
-        this.d.service.send(session.id, next.prompt, next.context, { images: next.images })
       }
     } catch {
       this.pushQueue(session.projectId)

@@ -24,7 +24,7 @@ const SUGGESTIONS = [
 function withUndo(session: SessionView) {
   const out: ReactNode[] = []
   const items = session.items ?? []
-  const starts = items.flatMap((it, i) => (it.type === 'user' ? [i] : []))
+  const starts = items.flatMap((it, i) => (it.type === 'user' && !it.steering ? [i] : []))
   if (!starts.length) return items.map((it) => <Item key={it.id} item={it} session={session} />)
   for (const it of items.slice(0, starts[0])) out.push(<Item key={it.id} item={it} session={session} />)
   starts.forEach((start, n) => {
@@ -196,12 +196,11 @@ function Composer({ agent, compact }: { agent: AgentId; compact?: boolean }) {
   }, [agent])
 
   const running = !!session?.running
-  // si el agente está trabajando, el mensaje se pone en cola en lugar de bloquear
+  // añade información al turno activo; el motor conserva en cola lo que llegue al cerrar.
   const send = () => {
     const msg = messageText(text, att.paths)
     if (!msg) return
-    if (session && running) ps.enqueue({ sessionId: session.id }, msg, att.paths)
-    else if (session) ps.sendPrompt(session.id, msg, true, att.paths)
+    if (session) ps.sendPrompt(session.id, msg, true, att.paths)
     else ps.ask(agent, msg, { images: att.paths })
     setText('')
     att.clear()
@@ -217,7 +216,7 @@ function Composer({ agent, compact }: { agent: AgentId; compact?: boolean }) {
           rows={2}
           value={text}
           onPaste={att.onPaste}
-          placeholder={running ? `${AGENT_NAMES[agent]} está trabajando: lo que escribas quedará en cola` : `Pide algo a ${AGENT_NAMES[agent]}…  @ ficheros · / tus prompts`}
+          placeholder={running ? `${AGENT_NAMES[agent]} está trabajando: añade información a su tarea` : `Pide algo a ${AGENT_NAMES[agent]}…  @ ficheros · / tus prompts`}
           onChange={(e) => (setText(e.target.value), mentions.trackCaret())}
           onKeyUp={mentions.trackCaret}
           onClick={mentions.trackCaret}
@@ -239,8 +238,8 @@ function Composer({ agent, compact }: { agent: AgentId; compact?: boolean }) {
               <Icon.stop size={12} />
             </button>
           )}
-          <button className={`send-btn agent-${agent}`} disabled={!text.trim() && !att.count} onClick={send} title={running ? 'Poner en cola (↵)' : 'Enviar (↵)'}>
-            {running ? <Icon.clock size={14} /> : <Icon.up size={15} />}
+          <button className={`send-btn agent-${agent}`} disabled={!text.trim() && !att.count} onClick={send} title={running ? 'Añadir al turno actual sin detenerlo (↵)' : 'Enviar (↵)'}>
+            <Icon.up size={15} />
           </button>
         </div>
       </div>

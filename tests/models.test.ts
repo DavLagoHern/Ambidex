@@ -20,8 +20,10 @@ describe('modelo según la dificultad', () => {
     expect(pickModel('claude', 'hard', policy)).toEqual({ model: 'claude-opus-5-5', tier: 'hard', guessed: false })
     expect(pickModel('claude', 'easy', policy)).toEqual({ model: 'claude-sonnet-5-5', tier: 'easy', guessed: false })
     expect(pickModel('codex', 'easy', policy)?.model).toBe('gpt-6.1-terra')
-    // sin estimación, el de las difíciles
-    expect(pickModel('codex', undefined, policy)).toEqual({ model: 'gpt-6.1-sol', tier: 'hard', guessed: true })
+    // sin estimación, o difícil con poca seguridad, el de las sencillas (el caro solo si se ve difícil)
+    expect(pickModel('codex', undefined, policy)).toEqual({ model: 'gpt-6.1-terra', tier: 'easy', guessed: true })
+    expect(pickModel('claude', 'hard', policy, undefined, 0.2)).toEqual({ model: 'claude-sonnet-5-5', tier: 'easy', guessed: true })
+    expect(pickModel('claude', 'hard', policy, undefined, 0.3)?.model).toBe('claude-opus-5-5')
   })
 
   it('nunca elige un modelo sin marcar ni uno que el CLI instalado no tenga', () => {
@@ -91,11 +93,11 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(r2.decision?.model).toBe('claude-haiku-5-5')
   })
 
-  it('si Jev duda, el modelo de las difíciles; sin la opción, el de la conversación', async () => {
+  it('si Jev duda, el modelo de las sencillas; sin la opción, el de la conversación', async () => {
     const s = setup(() => ({ category: 'plan' }))
     const t = s.dispatcher.createThread(s.project.id)
     const r1 = await s.dispatcher.sendThread(t.id, 'algo')
-    expect(r1.decision).toMatchObject({ model: 'claude-opus-5-5', tier: 'hard' })
+    expect(r1.decision).toMatchObject({ model: 'claude-sonnet-5-5', tier: 'easy' })
     expect(r1.decision?.reason).toContain('dificultad sin estimar')
 
     s.store.saveSettings({ modelPolicy: { ...DEFAULT_MODEL_POLICY, auto: false, autoEffort: false }, claudeModel: 'opus' })
@@ -118,7 +120,7 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     // duda (o no contesta): medio
     const r1 = await s.dispatcher.sendThread(t.id, 'arquitectura, quizá')
     expect(r1.decision).toMatchObject({ effort: 'medium' })
-    expect(r1.decision?.reason).toContain('razonamiento medio (seguridad 30 %, hace falta 60 %)')
+    expect(r1.decision?.reason).toContain('razonamiento medio (seguridad 30 %, hace falta 75 %)')
     expect(r1.decision?.tierConfidence).toBe(0.3)
     expect(s.sent.at(-1)?.opts.effort).toBe('medium')
     // la conversación no lo fija: lo decide cada mensaje
@@ -186,7 +188,7 @@ describe('chat único: lo que hizo el otro agente', () => {
 })
 
 describe('cola: «Enviar ya»', () => {
-  it('con el agente ocupado avisa; con permiso pasa el mensaje el primero y detiene el turno en curso', async () => {
+  it('si no admite entrada mantiene la cola y nunca cancela el turno', async () => {
     const store = memoryStore()
     const project = store.openProject(tmpDir(), 'demo', null)
     const running = new Set<string>()
@@ -201,21 +203,22 @@ describe('cola: «Enviar ya»', () => {
         return { runId: 'r', done: new Promise(() => {}) }
       },
       isRunning: (id: string) => running.has(id),
+      // como Codex: no admite mensajes a mitad de turno
+      steer: () => false,
       cancel: async (id: string) => void cancelled.push(id)
     }
     const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, models: (a) => CATALOG[a] })
     const t = dispatcher.createThread(project.id)
-    const first = await dispatcher.sendThread(t.id, 'primero', { agent: 'claude' })
+    await dispatcher.sendThread(t.id, 'primero', { agent: 'claude' })
     const a = await dispatcher.sendThread(t.id, 'en cola 1', { agent: 'claude' })
     const b = await dispatcher.sendThread(t.id, 'en cola 2', { agent: 'claude' })
     expect(a.queued && b.queued).toBeTruthy()
     // sin permiso para interrumpir: no se toca nada y la cola sigue igual
-    await expect(dispatcher.sendNow(b.queued!.id)).rejects.toThrow(/sigue trabajando/)
+    await expect(dispatcher.sendNow(b.queued!.id)).rejects.toThrow(/sigue en cola/)
     expect(store.nextQueued({ threadId: t.id })?.prompt).toBe('en cola 1')
-    // con permiso: el segundo pasa a ser el siguiente y se detiene el turno de Claude (al pararse, sale este)
-    expect(await dispatcher.sendNow(b.queued!.id, true)).toBe('interrupting')
-    expect(cancelled).toEqual([first.sessionId])
-    expect(store.nextQueued({ threadId: t.id })?.prompt).toBe('en cola 2')
+    await expect(dispatcher.sendNow(b.queued!.id)).rejects.toThrow(/sigue en cola/)
+    expect(cancelled).toEqual([])
+    expect(store.nextQueued({ threadId: t.id })?.prompt).toBe('en cola 1')
     expect(store.listQueue(project.id)).toHaveLength(2)
     // con el agente libre sale en el acto
     running.clear()
@@ -228,10 +231,69 @@ describe('razonamiento automático', () => {
   it('sube o baja solo con confianza y respeta los niveles del modelo', () => {
     expect(pickEffort(undefined, undefined)).toEqual({ effort: 'medium', level: 'medium', sure: false })
     expect(pickEffort('hard', 0.4)).toMatchObject({ effort: 'medium', sure: false })
-    expect(pickEffort('hard', 0.6)).toMatchObject({ effort: 'high', sure: true })
+    // alto exige más seguridad (75 %) que bajo (60 %): es lo que más gasta
+    expect(pickEffort('hard', 0.7)).toMatchObject({ effort: 'medium', sure: false })
+    expect(pickEffort('hard', 0.75)).toMatchObject({ effort: 'high', sure: true })
+    expect(pickEffort('easy', 0.6)).toMatchObject({ effort: 'low', sure: true })
     expect(pickEffort('easy', 0.95)).toMatchObject({ effort: 'low', sure: true })
     // un modelo sin «alto»: medio; sin niveles: ninguno
     expect(pickEffort('hard', 0.9, ['low', 'medium'])).toMatchObject({ effort: 'medium', sure: false })
     expect(pickEffort('hard', 0.9, []).effort).toBeUndefined()
   })
+})
+
+describe('mensajes a mitad de turno', () => {
+  it.each(['claude', 'codex'] as const)('con %s trabajando, añade información al turno sin cola ni cancelación', async (agent) => {
+    const store = memoryStore()
+    const project = store.openProject(tmpDir(), 'demo', null)
+    const running = new Set<string>()
+    const steered: string[] = []
+    const cancelled: string[] = []
+    const service = {
+      getSession: (id: string) => {
+        const s = store.getSession(id)
+        return s && { ...s, running: running.has(id) }
+      },
+      send: (sessionId: string) => (running.add(sessionId), { runId: 'r', done: new Promise(() => {}) }),
+      isRunning: (id: string) => running.has(id),
+      steer: (_id: string, text: string) => (steered.push(text), true),
+      cancel: async (id: string) => void cancelled.push(id)
+    }
+    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, models: (a) => CATALOG[a] })
+    const t = dispatcher.createThread(project.id)
+    await dispatcher.sendThread(t.id, 'primero', { agent })
+    const r = await dispatcher.sendThread(t.id, 'y además esto', { agent })
+    expect(r.steered).toBe(true)
+    expect(r.queued).toBeUndefined()
+    expect(steered).toEqual(['y además esto'])
+    expect(cancelled).toEqual([])
+    expect(store.listQueue(project.id)).toHaveLength(0)
+  })
+})
+
+it('en Ambos los agentes simultáneos reciben su tarea mutua y el resultado al finalizar', async () => {
+  const store = memoryStore()
+  const project = store.openProject(tmpDir(), 'demo', null)
+  const running = new Set<string>()
+  const requests = new Map<string, string>()
+  const contexts = new Map<string, string | undefined>()
+  const delivered: { id: string; text: string; internal?: boolean }[] = []
+  const service = {
+    getSession: (id: string) => { const s = store.getSession(id); return s && { ...s, running: running.has(id) } },
+    send: (id: string, prompt: string, context?: string) => { running.add(id); requests.set(id, prompt); contexts.set(id, context) },
+    coordinationSnapshot: (id: string) => requests.get(id) ?? '',
+    steer: async (id: string, text: string, _ctx?: string, _images?: string[], internal?: boolean) => { delivered.push({ id, text, internal }); return true }
+  }
+  const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true })
+  const thread = dispatcher.createThread(project.id)
+  const claude = await dispatcher.sendThread(thread.id, 'Revisa la interfaz', { agent: 'claude' })
+  const codex = await dispatcher.sendThread(thread.id, 'Corrige el motor', { agent: 'codex' })
+  expect(contexts.get(codex.sessionId!)).toContain('Claude Code está trabajando ahora')
+  expect(contexts.get(codex.sessionId!)).toContain('Revisa la interfaz')
+  expect(delivered).toEqual([expect.objectContaining({ id: claude.sessionId, internal: true, text: expect.stringContaining('Corrige el motor') })])
+  running.delete(codex.sessionId!)
+  requests.set(codex.sessionId!, 'Motor corregido: src/engine.ts')
+  await dispatcher.onIdle(store.getSession(codex.sessionId!)!)
+  expect(delivered.at(-1)).toMatchObject({ id: claude.sessionId, internal: true, text: expect.stringContaining('Motor corregido: src/engine.ts') })
+  expect(store.listQueue(project.id)).toHaveLength(0)
 })

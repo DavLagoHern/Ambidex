@@ -6,7 +6,7 @@ import type { OrchMode, OrchStart, Orchestration, PlanTask } from '@shared/orche
 import { AGENT_NAMES } from '@shared/types'
 import { isWebUrl, type WebTab } from '@shared/web'
 import { api } from './api'
-import { attempt, confirmAsync, getApp, saveSettings, setChanges, toast } from './app-store'
+import { attempt, getApp, saveSettings, setChanges, toast } from './app-store'
 import { defaultDock, DockNode, DockPanel, FOLDABLE, LayoutShow, LegacySizes, upgradeDock } from './dock'
 import { basename, errMsg, relPath, toolName, uid } from './utils'
 
@@ -69,6 +69,7 @@ export interface PendingSend {
   text: string
   images?: string[]
   at: number
+  error?: string
 }
 
 export interface ProjectState {
@@ -704,13 +705,13 @@ export class ProjectStore {
 
   async sendPrompt(sessionId: string, prompt: string, withContext = true, images?: string[]) {
     const s = this.state.sessions[sessionId]
-    if (!s || s.running || !prompt.trim()) return
+    if (!s || !prompt.trim()) return
     if (!s.items) await this.loadMessages(sessionId)
     this.patchSession(sessionId, { running: true })
     try {
       await api.sessions.send(sessionId, prompt, withContext ? this.contextBlock() || undefined : undefined, images)
     } catch (e) {
-      this.patchSession(sessionId, { running: false })
+      if (!s.running) this.patchSession(sessionId, { running: false })
       toast(errMsg(e), 'error')
     }
   }
@@ -810,63 +811,45 @@ export class ProjectStore {
     for (const sid of Object.values(t.sessions)) if (sid && this.state.sessions[sid] && !this.state.sessions[sid].items) this.loadMessages(sid)
   }
 
-  // ¿Este mensaje irá a la cola? Con un agente elegido, si su conversación del hilo trabaja; en Auto, si todos los
-  // agentes disponibles están trabajando (si hay uno libre, el motor lo manda a ese)
-  private likelyQueued(threadId: string, target: Target): boolean {
-    const t = this.state.threads[threadId]
-    if (!t) return false
-    const runs = (a: AgentId) => !!(t.sessions[a] && this.state.sessions[t.sessions[a]!]?.running)
-    if (target === 'claude' || target === 'codex') return runs(target)
-    if (target !== 'auto') return false
-    const ok = (a: AgentId) => {
-      const i = getApp().agentInfo.find((x) => x.agent === a)
-      return !i || (!!i.path && i.auth?.loggedIn !== false)
-    }
-    const usable = (['claude', 'codex'] as AgentId[]).filter(ok)
-    return usable.length > 0 && usable.every(runs)
-  }
-
   // Envía desde el chat único: el motor decide el agente (o lo fija el usuario) o arranca el equipo
   async sendUnified(
     text: string,
     target: Target,
     images?: string[],
     models?: Partial<Record<AgentId, string>>,
-    efforts?: Partial<Record<AgentId, string>>
+    efforts?: Partial<Record<AgentId, string>>,
+    opts: { separate?: boolean } = {}
   ): Promise<RouteDecision | undefined> {
     let id = this.state.activeThread
     if (id && !this.state.threads[id]) id = null
+    // «tarea aparte»: conversación nueva, sin tocar lo que está haciendo la actual
+    if (opts.separate) id = null
     if (target === 'team') {
       id ??= (await this.newThread()) ?? null
       if (!id) return undefined
       await this.startTeam(text, this.state.teamMode, id)
       return undefined
     }
-    // si va a quedar en cola (su destino está ocupado), no se pinta en el chat: aparece directamente en la cola
-    if (id && this.likelyQueued(id, target)) {
-      try {
-        const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context: this.contextBlock() || undefined, images, models, efforts })
-        if (r.queued) toast('El agente está ocupado: tu mensaje queda en la cola', 'info')
-        return r.decision
-      } catch (e) {
-        toast(errMsg(e), 'error')
-        return undefined
-      }
-    }
     // el mensaje se ve ya, con su indicador; el motor decide mientras tanto
     const p: PendingSend = { id: uid(), threadId: id, text, images: images?.length ? images : undefined, at: Date.now() }
-    const drop = () => this.set((s) => ({ pending: s.pending.filter((x) => x.id !== p.id) }))
+    let failed = false
+    const drop = () => {
+      if (!failed) this.set((s) => ({ pending: s.pending.filter((x) => x.id !== p.id) }))
+    }
     this.set((s) => ({ pending: [...s.pending, p] }))
     try {
       id ??= (await this.newThread()) ?? null
       if (!id) return undefined
       const tid = id
+      p.threadId = tid
       this.set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, threadId: tid } : x)) }))
       const context = this.contextBlock() || undefined
       const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context, images, models, efforts })
       if (r.queued) toast('El agente está ocupado: tu mensaje queda en la cola', 'info')
       return r.decision
     } catch (e) {
+      failed = true
+      this.set((s) => ({ pending: s.pending.map((x) => x.id === p.id ? { ...x, error: errMsg(e) } : x) }))
       toast(errMsg(e), 'error')
       return undefined
     } finally {
@@ -882,20 +865,11 @@ export class ProjectStore {
 
   removeQueued = (id: string) => attempt(() => api.queue.remove(id))
   updateQueued = (id: string, prompt: string) => attempt(() => api.queue.update(id, prompt))
-  // «Enviar ya»: si el agente está libre sale en el acto; si está trabajando, se pregunta antes de detenerlo
+  // «Enviar ya»: añade información al turno activo sin detenerlo.
   sendQueuedNow = async (id: string) => {
     const q = this.state.queue.find((x) => x.id === id)
     if (!q) return
-    const sids = q.sessionId ? [q.sessionId] : q.threadId ? Object.values(this.state.threads[q.threadId]?.sessions ?? {}) : []
-    const running = sids.filter((sid): sid is string => !!sid && !!this.state.sessions[sid]?.running)
-    // en Ambos, si uno de los dos está libre el mensaje se va a ese sin interrumpir a nadie
-    const allBusy = running.length > 0 && (q.sessionId || q.agent ? running.some((sid) => !q.agent || this.state.sessions[sid]?.agent === q.agent) : running.length >= 2)
-    if (allBusy) {
-      const who = AGENT_NAMES[this.state.sessions[running[0]]?.agent ?? 'claude']
-      if (!(await confirmAsync(`¿Detener a ${who} y enviar este mensaje ya?`, 'Se para lo que está haciendo ahora (lo hecho hasta aquí se queda) y este mensaje sale el siguiente.'))) return
-    }
-    const r = await attempt(() => api.queue.sendNow(id, allBusy))
-    if (r === 'interrupting') toast(`Deteniendo a ${AGENT_NAMES[this.state.sessions[running[0]]?.agent ?? 'claude']}: tu mensaje sale a continuación`, 'info')
+    await attempt(() => api.queue.sendNow(id))
   }
 
   setQueue(items: QueuedMessage[]) {

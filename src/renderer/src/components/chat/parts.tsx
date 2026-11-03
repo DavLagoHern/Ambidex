@@ -829,7 +829,7 @@ export function QueueList({ items }: { items: QueuedMessage[] }) {
               {q.prompt}
             </span>
           )}
-          <button className="icon-btn" title="Enviar ya (si el agente está trabajando, te pregunta si detenerlo)" onClick={() => ps.sendQueuedNow(q.id)}>
+          <button className="icon-btn" title="Añadir al turno actual sin detenerlo" onClick={() => ps.sendQueuedNow(q.id)}>
             <Icon.send size={12} />
           </button>
           <button className="icon-btn" title="Quitar de la cola" onClick={() => ps.removeQueued(q.id)}>

@@ -543,7 +543,14 @@ function handlers(): Handlers {
     },
     'sessions:messages': (id) => store.messages(id),
     'sessions:search': (projectId, q) => (q.trim() ? store.search(projectId, q.trim()) : []),
-    'sessions:send': (id, prompt, context, images) => {
+    'sessions:send': async (id, prompt, context, images) => {
+      if (service.isRunning(id)) {
+        if (await service.steer(id, prompt, context, images)) return { steered: true }
+        dispatcher.enqueue({ projectId: store.getSession(id)!.projectId, sessionId: id, prompt, context, images })
+        // Puede haber terminado entre comprobar el estado y añadir el mensaje a la cola.
+        if (!service.isRunning(id)) void dispatcher.onIdle(store.getSession(id)!)
+        return { queued: true }
+      }
       const { runId } = service.send(id, prompt, context, { images })
       updateDockBadge()
       return { runId }
@@ -606,14 +613,14 @@ function handlers(): Handlers {
     'threads:send': async (threadId, text, opts) => {
       const r = await dispatcher.sendThread(threadId, text, opts)
       updateDockBadge()
-      return { decision: r.decision, sessionId: r.sessionId, queued: !!r.queued }
+      return { decision: r.decision, sessionId: r.sessionId, queued: !!r.queued, steered: !!r.steered }
     },
 
     'queue:list': (projectId) => store.listQueue(projectId),
     'queue:add': (m) => dispatcher.enqueue(m),
     'queue:remove': (id) => dispatcher.remove(id),
     'queue:update': (id, prompt) => dispatcher.update(id, prompt),
-    'queue:sendNow': (id, interrupt) => dispatcher.sendNow(id, interrupt),
+    'queue:sendNow': (id) => dispatcher.sendNow(id),
 
     'orch:list': (projectId) => orchestrator.list(projectId),
     'orch:get': (id) => orchestrator.get(id),

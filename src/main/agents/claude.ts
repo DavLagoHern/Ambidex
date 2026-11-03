@@ -41,6 +41,14 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
 
 const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']
 
+function userLine(text: string, images?: string[]) {
+  const content = [
+    { type: 'text', text },
+    ...(images ?? []).map((p) => ({ type: 'image', source: { type: 'base64', media_type: imageMime(p), data: readFileSync(p).toString('base64') } }))
+  ]
+  return JSON.stringify({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '' }) + '\n'
+}
+
 export const claudeAdapter: Adapter = {
   agent: 'claude',
 
@@ -59,7 +67,7 @@ export const claudeAdapter: Adapter = {
       'none'
     ]
     // con imágenes, el mensaje va como JSON con bloques de texto e imagen (ver stdin)
-    if (req.images?.length) args.push('--input-format', 'stream-json')
+    if (req.images?.length || req.stream) args.push('--input-format', 'stream-json')
     if (req.resumeId) args.push('--resume', req.resumeId)
     if (req.resumeId && req.fork) args.push('--fork-session')
     if (req.model) args.push('--model', req.model)
@@ -71,13 +79,14 @@ export const claudeAdapter: Adapter = {
   },
 
   stdin(text, req) {
-    if (!req.images?.length) return text
-    const content = [
-      { type: 'text', text },
-      ...req.images.map((p) => ({ type: 'image', source: { type: 'base64', media_type: imageMime(p), data: readFileSync(p).toString('base64') } }))
-    ]
-    return JSON.stringify({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '' }) + '\n'
+    if (!req.images?.length && !req.stream) return text
+    return userLine(text, req.images)
   },
+
+  // con entrada stream-json, lo que se escribe a mitad de turno lo incorpora en el siguiente paso, sin parar
+  streams: (req) => !req.schema,
+  steer: (text, images) => userLine(text, images),
+  turnEnded: (line) => line.startsWith('{"type":"result"') || parseJson(line)?.type === 'result',
 
   createParser() {
     const tools = new Map<string, { name: string; input: Record<string, unknown> }>()

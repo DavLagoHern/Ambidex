@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { attempt, confirmAsync, setApp, toast, useApp } from '../lib/app-store'
 import { usePS, useStore } from '../lib/project-store'
 import { basename, dirname, errMsg, relPath, timeAgo } from '../lib/utils'
+import { gitPrimaryAction } from '../lib/git-primary-action'
 import { cloneRepo, MenuTree, repoMenu } from './GitMenu'
 import { HistoryList } from './HistoryPanel'
 import { Icon } from './Icons'
@@ -29,8 +30,10 @@ function FileRow({
 }) {
   const ps = usePS()
   const code = f.conflicted ? '!' : f.untracked ? 'U' : staged ? f.index : f.worktree
+  // abierto a la derecha: es la pestaña activa y es el diff de este fichero
+  const open = useStore((s) => s.activeTab === `diff:${staged ? 'staged' : 'unstaged'}:${cwd}:${f.path}`)
   return (
-    <div className="file-row" onClick={onOpen} title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}>
+    <div className={`file-row ${open ? 'active' : ''}`} onClick={onOpen} title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}>
       <span className={`file-name ellipsis ${code === 'D' ? 'deleted' : ''}`}>
         {basename(f.path)} <span className="muted small">{dirname(f.path)}</span>
       </span>
@@ -80,7 +83,7 @@ function BranchMenu({ cwd, onClose }: { cwd: string; onClose: () => void }) {
     ps.refreshGit()
   }
   return (
-    <div className="menu wide" onMouseLeave={onClose}>
+    <div className="menu wide branch-menu" onMouseLeave={onClose}>
       <input
         autoFocus
         className="input"
@@ -106,8 +109,8 @@ function BranchMenu({ cwd, onClose }: { cwd: string; onClose: () => void }) {
               ps.set((s) => ({ fsTick: s.fsTick + 1 }))
             }}
           >
-            <span>
-              {b.current && <Icon.check size={12} />} {b.name} {b.remote && <span className="badge">remota</span>}
+            <span className="branch-menu-name" title={b.name}>
+              {b.current && <Icon.check size={12} />} <span className="ellipsis">{b.name}</span> {b.remote && <span className="badge">remota</span>}
             </span>
             <span className="muted small">{b.lastCommit ? timeAgo(b.lastCommit) : ''}</span>
           </div>
@@ -129,9 +132,9 @@ function Worktrees({ cwd }: { cwd: string }) {
   }, [cwd, gitTick])
   if (wts.length <= 1) return null
   return (
-    <div className="section">
+    <div className="section worktrees">
       <div className="section-header" onClick={() => setOpen(!open)}>
-        {open ? <Icon.chevronDown size={12} /> : <Icon.chevronRight size={12} />} Worktrees <span className="count">{wts.length}</span>
+        {open ? <Icon.chevronDown size={12} /> : <Icon.chevronRight size={12} />} <Icon.layers size={12} className="section-icon" /> Worktrees <span className="count">{wts.length}</span>
       </div>
       {open &&
         wts.map((w) => (
@@ -320,7 +323,7 @@ export function GitPanel() {
   const [branchMenu, setBranchMenu] = useState(false)
   const [globalMenu, setGlobalMenu] = useState(false)
   const [stats, setStats] = useState<{ staged: Record<string, [number, number]>; unstaged: Record<string, [number, number]> }>({ staged: {}, unstaged: {} })
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ graph: false })
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ graph: true })
   const msgRef = useRef<HTMLTextAreaElement>(null)
   const messageRef = useRef(message)
   messageRef.current = message
@@ -346,6 +349,12 @@ export function GitPanel() {
   const staged = git?.files.filter((f) => f.staged) ?? []
   const unstaged = git?.files.filter((f) => f.unstaged && !f.conflicted) ?? []
   const conflicts = git?.files.filter((f) => f.conflicted) ?? []
+  // Plegar no mueve nada de sitio: solo los plegados que quedan al final (sin ninguno abierto debajo) bajan al
+  // fondo; el hueco libre va justo después de la última sección abierta
+  const openStaged = staged.length > 0 && !collapsed.staged
+  const openChanges = unstaged.length > 0 && !collapsed.changes
+  const spacerAt: 'top' | 'staged' | 'changes' | 'graph' = !collapsed.graph ? 'graph' : openChanges ? 'changes' : openStaged ? 'staged' : 'top'
+  const primaryAction = git ? gitPrimaryAction(git, message, amend) : 'commit'
   const [prOpen, setPrOpen] = useState(false)
 
   const run = async (label: string, fn: () => Promise<unknown>, ok?: string) => {
@@ -382,6 +391,14 @@ export function GitPanel() {
     setBusy(null)
     ps.refreshGit()
   }
+
+  // una línea hasta que haya texto (o se genere un mensaje); crece hasta 3
+  useEffect(() => {
+    const el = msgRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 3 * 19 + 14)}px`
+  }, [message])
 
   const generate = async () => {
     const agent = settings?.commitAgent || 'claude'
@@ -458,14 +475,14 @@ export function GitPanel() {
         </span>
       </div>
 
-      <div className="panel-body">
-        <div className="section">
+      <div className="panel-body git-body">
+        <div className="section sec-repos">
           <div className="section-header" onClick={() => toggle('repos')}>
-            {collapsed.repos ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} Repositorios <span className="count">{repos.length}</span>
+            {collapsed.repos ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.git size={12} className="section-icon" /> Repositorios <span className="count">{repos.length}</span>
           </div>
           {!collapsed.repos && (
             <>
-              {repos.map((r) => <RepoRow key={r} path={r} active={r === repo} hooks={hooks} />)}
+              {repos.length > 0 && <div className="section-scroll repos-scroll">{repos.map((r) => <RepoRow key={r} path={r} active={r === repo} hooks={hooks} />)}</div>}
               {repos.length === 0 && (
                 <div className="empty small">
                   <p>No se han encontrado repositorios Git en esta carpeta.</p>
@@ -483,6 +500,11 @@ export function GitPanel() {
 
         {git?.isRepo && repo && (
           <>
+            <div className="section sec-commit">
+              <div className="section-header" style={{ cursor: 'default' }}>
+                <Icon.fileEdit size={12} className="section-icon" /> Cambios
+                <span className="count">{git.branch}</span>
+              </div>
             <div className="branch-bar">
               <div className="dropdown" style={{ flex: 1, minWidth: 0 }}>
                 <button className="btn ghost branch-btn" onClick={() => setBranchMenu(!branchMenu)} title="Cambiar de rama">
@@ -536,7 +558,7 @@ export function GitPanel() {
               <textarea
                 ref={msgRef}
                 className="input"
-                rows={3}
+                rows={1}
                 placeholder={`Mensaje (⌘↵ para commit en "${git.branch}"${repos.length > 1 ? ` · ${basename(repo)}` : ''})`}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
@@ -545,22 +567,26 @@ export function GitPanel() {
                 }}
               />
               <div className="commit-actions">
-                <button className="btn" disabled={!!busy} onClick={generate} title={`Generar mensaje con ${settings?.commitAgent === 'codex' ? 'Codex' : 'Claude'}`}>
-                  <Icon.sparkles size={13} /> {busy === 'generate' ? 'Generando…' : 'Generar'}
+                <button
+                  className="btn primary"
+                  disabled={!!busy}
+                  title={primaryAction === 'pull' ? (git.ahead ? 'Las ramas han divergido; pull solo admite avance rápido' : 'Descargar cambios de la rama remota') : primaryAction === 'push' ? 'Subir commits a la rama remota' : undefined}
+                  onClick={() => primaryAction === 'pull' ? run('pull', () => api.git.pull(repo), 'Pull completado') : primaryAction === 'push' ? run('push', () => api.git.push(repo), 'Push completado') : doCommit()}
+                >
+                  {primaryAction === 'pull' ? <Icon.down size={13} /> : primaryAction === 'push' ? <Icon.up size={13} /> : <Icon.check size={13} />}
+                  {primaryAction === 'pull' ? busy === 'pull' ? 'Pull…' : `Pull · ${git.behind}` : primaryAction === 'push' ? busy === 'push' ? 'Push…' : `Push · ${git.ahead}` : busy === 'commit' ? 'Commit…' : staged.length || amend ? 'Commit' : 'Commit todo'}
                 </button>
-                <label className="check">
-                  <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} /> Amend
-                </label>
-                <button className="btn primary" style={{ marginLeft: 'auto' }} disabled={!!busy} onClick={() => doCommit()}>
-                  <Icon.check size={13} /> {busy === 'commit' ? 'Commit…' : staged.length || amend ? 'Commit' : 'Commit todo'}
+                <button className="btn icon-only generate" disabled={!!busy} onClick={generate} title={`Generar mensaje con ${settings?.commitAgent === 'codex' ? 'Codex' : 'Claude'}`}>
+                  {busy === 'generate' ? <Icon.spinner size={14} /> : <Icon.sparkles size={14} />}
                 </button>
               </div>
+            </div>
             </div>
 
             {conflicts.length > 0 && (
               <div className="section">
                 <div className="section-header">
-                  <Icon.alert size={12} /> Conflictos <span className="count">{conflicts.length}</span>
+                  <Icon.alert size={12} className="section-icon" /> Conflictos <span className="count">{conflicts.length}</span>
                 </div>
                 {conflicts.map((f) => (
                   <div key={'c' + f.path} className="file-row conflict" onClick={() => ps.openFile(`${repo}/${f.path}`)} title="Abrir para resolver a mano">
@@ -597,10 +623,11 @@ export function GitPanel() {
               </div>
             )}
 
+            {spacerAt === 'top' && <div className="git-spacer" />}
             {staged.length > 0 && (
-              <div className="section">
+              <div className={`section fill sec-staged ${collapsed.staged ? 'folded' : ''}`}>
                 <div className="section-header" onClick={() => toggle('staged')}>
-                  {collapsed.staged ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} Preparados
+                  {collapsed.staged ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.check size={12} className="section-icon" /> Preparados
                   <span className="count">{staged.length}</span>
                   <span className="row-actions" onClick={(e) => e.stopPropagation()}>
                     <button className="icon-btn" title="Quitar todo del stage" onClick={() => run('unstage', () => api.git.unstage(repo, staged.map((f) => f.path)))}>
@@ -608,7 +635,7 @@ export function GitPanel() {
                     </button>
                   </span>
                 </div>
-                {!collapsed.staged &&
+                {!collapsed.staged && <div className="section-scroll">{
                   staged.map((f) => (
                     <FileRow
                       key={'s' + f.path}
@@ -619,12 +646,13 @@ export function GitPanel() {
                       onOpen={() => ps.openDiff(repo, f.path, 'staged')}
                       onUnstage={() => run('unstage', () => api.git.unstage(repo, [f.path]))}
                     />
-                  ))}
+                  ))}</div>}
               </div>
             )}
-            <div className="section">
+            {spacerAt === 'staged' && <div className="git-spacer" />}
+            <div className={`section fill sec-changes ${collapsed.changes || !unstaged.length ? 'folded' : ''}`}>
               <div className="section-header" onClick={() => toggle('changes')}>
-                {collapsed.changes ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} Cambios
+                {collapsed.changes || !unstaged.length ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.fileEdit size={12} className="section-icon" /> Pendientes
                 <span className="count">{unstaged.length}</span>
                 {unstaged.length > 0 && (
                   <span className="row-actions" onClick={(e) => e.stopPropagation()}>
@@ -644,8 +672,8 @@ export function GitPanel() {
                   </span>
                 )}
               </div>
-              {!collapsed.changes &&
-                unstaged.map((f) => (
+              {!collapsed.changes && unstaged.length > 0 && <div className="section-scroll">
+                {unstaged.map((f) => (
                   <FileRow
                     key={'u' + f.path}
                     f={f}
@@ -659,14 +687,15 @@ export function GitPanel() {
                     }}
                   />
                 ))}
-              {!collapsed.changes && !unstaged.length && !staged.length && <div className="empty small">Sin cambios. Árbol de trabajo limpio.</div>}
+              </div>}
             </div>
 
-            <div className="section">
+            {spacerAt === 'changes' && <div className="git-spacer" />}
+            <div className={`section fill graph ${collapsed.graph ? 'folded' : ''}`}>
               <div className="section-header" onClick={() => toggle('graph')}>
-                {collapsed.graph ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} Grafo
+                {collapsed.graph ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.history size={12} className="section-icon" /> Grafo
               </div>
-              {!collapsed.graph && <HistoryList cwd={repo} embedded />}
+              {!collapsed.graph && <div className="section-scroll flush"><HistoryList cwd={repo} embedded /></div>}
             </div>
             <Worktrees cwd={repo} />
           </>
