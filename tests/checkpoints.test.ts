@@ -107,7 +107,6 @@ describe('Puntos de control (deshacer un turno)', () => {
       resolveBin: () => FAKE_CLI,
       env: () => ({ ...process.env, FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl'), FAKE_WRITE: JSON.stringify({ 'a.txt': 'cambiado por el agente\n' }) }),
       defaultModel: () => undefined,
-      allowUnrestricted: () => false,
       checkpoint: (cwd) => snapshot(cwd),
       uiThrottleMs: 5,
       dbThrottleMs: 10
@@ -134,7 +133,6 @@ describe('Puntos de control (deshacer un turno)', () => {
       resolveBin: () => FAKE_CLI,
       env: () => ({ ...process.env, FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl'), FAKE_WRITE: JSON.stringify({ 'a.txt': 'no debería cambiar\n' }) }),
       defaultModel: () => undefined,
-      allowUnrestricted: () => false,
       checkpoint: () => new Promise((r) => (release = () => r(null))),
       uiThrottleMs: 5,
       dbThrottleMs: 10

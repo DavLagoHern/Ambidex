@@ -24,7 +24,6 @@ function setup(env: Record<string, string>, over: Partial<ServiceDeps> = {}) {
     resolveBin: () => FAKE_CLI,
     env: () => ({ ...process.env, ...env }),
     defaultModel: (a: AgentId) => (a === 'codex' ? 'gpt-6-sol' : undefined),
-    allowUnrestricted: () => false,
     onFinished: (run) => void finished.push(run.status),
     uiThrottleMs: 5,
     dbThrottleMs: 10,
@@ -143,6 +142,35 @@ describe('SessionService', () => {
     ])
   })
 
+  it('compactar: solo Claude con conversación ya empezada; manda /compact y en el chat se ve como «Compactar»', async () => {
+    const argsFile = join(tmpDir(), 'args.json')
+    const { store, service, project, finished } = setup({ FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl'), FAKE_ARGS_FILE: argsFile })
+    const codex = store.createSession(project.id, project.path, { agent: 'codex' })
+    expect(() => service.compact(codex.id)).toThrow(/Codex compacta solo/)
+    const s = store.createSession(project.id, project.path, { agent: 'claude' })
+    expect(() => service.compact(s.id)).toThrow(/nada que compactar/)
+    service.send(s.id, 'uno')
+    await waitFor(() => finished.length === 1)
+    service.compact(s.id)
+    await waitFor(() => finished.length === 2)
+    const args = JSON.parse(readFileSync(argsFile, 'utf8'))
+    expect(args.stdin).toBe('/compact')
+    expect(args.argv).toEqual(expect.arrayContaining(['--resume', '3f1c2b4a-1111-4222-8333-944455556666']))
+    expect(store.messages(s.id).filter((i) => i.type === 'user').map((i) => (i as { text: string }).text)).toEqual(['uno', 'Compactar la conversación'])
+  })
+
+  it('pasa a cada agente sus variables propias (el tope de contexto de Claude Code)', async () => {
+    const argsFile = join(tmpDir(), 'args.json')
+    const { store, service, project, finished } = setup(
+      { FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl'), FAKE_ARGS_FILE: argsFile },
+      { agentEnv: (a): Record<string, string> => (a === 'claude' ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' } : {}) }
+    )
+    const s = store.createSession(project.id, project.path, { agent: 'claude' })
+    service.send(s.id, 'uno')
+    await waitFor(() => finished.length === 1)
+    expect(JSON.parse(readFileSync(argsFile, 'utf8')).env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('200000')
+  })
+
   it('no permite dos ejecuciones simultáneas en la misma conversación', async () => {
     const { store, service, project, finished } = setup({ FAKE_FIXTURE: join(FIXTURES, 'claude-stream.jsonl') })
     const s = store.createSession(project.id, project.path, { agent: 'claude' })
@@ -175,12 +203,6 @@ describe('SessionService', () => {
     expect(err.text).toBe('error: algo salió mal en el CLI')
     expect(store.recentRuns(project.id, 1)[0]).toMatchObject({ status: 'failed', exitCode: 2 })
     expect(store.runLog(store.recentRuns(project.id, 1)[0].id).some((l) => l.stream === 'stderr')).toBe(true)
-  })
-
-  it('rechaza los modos sin restricciones si no están permitidos', () => {
-    const { store, service, project } = setup({})
-    const s = store.createSession(project.id, project.path, { agent: 'claude', permission: 'bypassPermissions' })
-    expect(() => service.send(s.id, 'x')).toThrow(/sin restricciones/)
   })
 
   it('tras un cierre inesperado, marca las ejecuciones como interrumpidas y no finge que siguen vivas', async () => {

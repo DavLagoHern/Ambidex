@@ -3,7 +3,7 @@ import { api } from './lib/api'
 import { initPanel, useApp } from './lib/app-store'
 import { DOCK_NAMES, DockPanel } from './lib/dock'
 import { ProjectProvider, ProjectStore } from './lib/project-store'
-import { ActivityPanel } from './components/ActivityPanel'
+import { ActivityLogPanel, AgentsPanel } from './components/ActivityPanel'
 import { AgentPanel } from './components/AgentPanel'
 import { BottomPanel } from './components/BottomPanel'
 import { Icon } from './components/Icons'
@@ -50,7 +50,8 @@ export default function PanelWindow({ projectId, panel }: { projectId: string; p
         <div className={`panelwin-body dock-${panel}`}>
           {panel === 'chat' && <AgentPanel />}
           {panel === 'terminal' && <BottomPanel visible />}
-          {panel === 'agents' && <ActivityPanel />}
+          {panel === 'agents' && <AgentsPanel />}
+          {panel === 'activity' && <ActivityLogPanel />}
           {panel === 'editor' && (
             <Suspense fallback={<div className="center-msg muted">Cargando el editor…</div>}>
               <EditorArea />

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
-import type { AgentId, AgentInfo, AgentLimits, ProjectMeta, ProjectPatch, Settings, JevStatus } from '@shared/types'
+import type { AgentId, AgentInfo, AgentLimits, AppUpdate, CliUpdate, ProjectMeta, ProjectPatch, Settings, JevStatus } from '@shared/types'
+import { AGENT_NAMES } from '@shared/types'
 import { api, on } from './api'
 import { ProjectStore, WINDOW_ID } from './project-store'
 import { errMsg, uid } from './utils'
@@ -33,6 +34,8 @@ export interface AppState {
   // sesión → proyecto, de los agentes que están trabajando ahora
   running: Record<string, { projectId: string; agent: AgentId; runId: string }>
   changes: Record<string, number>
+  // proyectos donde un agente terminó mientras no los mirabas (se limpia al entrar)
+  finished: Record<string, 'ok' | 'error'>
   toasts: Toast[]
   overlay: Overlay
   settingsSection: string
@@ -43,6 +46,10 @@ export interface AppState {
   dialog: { title: string; placeholder?: string; value?: string; resolve: (v: string | null) => void } | null
   // modelo local del enrutado
   jev: JevStatus | null
+  // versiones nuevas de los CLI
+  cliUpdates: Partial<Record<AgentId, CliUpdate>>
+  // versión nueva de Ambidex (se trae y compila sola; se instala al reiniciar)
+  appUpdate: AppUpdate | null
 }
 
 let state: AppState = {
@@ -58,12 +65,15 @@ let state: AppState = {
   limits: {},
   running: {},
   changes: {},
+  finished: {},
   toasts: [],
   overlay: null,
   settingsSection: 'agents',
   lightbox: null,
   loginAgent: null,
   jev: null,
+  cliUpdates: {},
+  appUpdate: null,
   picker: null,
   dialog: null
 }
@@ -196,11 +206,21 @@ export async function refreshAgents(force = false) {
 
 let saveActiveTimer: ReturnType<typeof setTimeout> | undefined
 
+function seen(finished: AppState['finished'], id: string | null): AppState['finished'] {
+  if (!id || !(id in finished)) return finished
+  const next = { ...finished }
+  delete next[id]
+  return next
+}
+
+// al volver a la ventana, el proyecto que tienes delante ya está visto
+window.addEventListener('focus', () => state.activeId && state.activeId in state.finished && setApp((s) => ({ finished: seen(s.finished, s.activeId) })))
+
 export function activate(id: string) {
   const meta = state.projects.find((p) => p.id === id)
   if (!meta) return
   ensureStore(meta)
-  setApp((s) => ({ activeId: id, mounted: s.mounted.includes(id) ? s.mounted : [...s.mounted, id] }))
+  setApp((s) => ({ activeId: id, mounted: s.mounted.includes(id) ? s.mounted : [...s.mounted, id], finished: seen(s.finished, id) }))
   clearTimeout(saveActiveTimer)
   saveActiveTimer = setTimeout(() => api.saveSettings({ activeProjectId: id }).then((settings) => setApp({ settings })), 400)
 }
@@ -276,6 +296,10 @@ export function cycleProject(dir: 1 | -1) {
   activate(openIds[(i + dir + openIds.length) % openIds.length])
 }
 
+// Instala la versión nueva ya compilada: la app se cierra y se vuelve a abrir actualizada (si hay agentes
+// trabajando, el proceso principal pregunta antes de cerrar)
+export const restartToUpdate = () => attempt(() => api.self.restart())
+
 export function setChanges(projectId: string, n: number) {
   if (state.changes[projectId] !== n) setApp((s) => ({ changes: { ...s.changes, [projectId]: n } }))
 }
@@ -292,15 +316,28 @@ function bindData() {
   on('run:status', (run) => {
     setApp((s) => {
       const running = { ...s.running }
+      let finished = s.finished
       if (run.status === 'running') running[run.sessionId] = { projectId: run.projectId, agent: run.agent, runId: run.id }
       // un aviso tardío de un turno ya terminado no quita el «trabajando» del turno que corre ahora
-      else if (running[run.sessionId]?.runId === run.id) delete running[run.sessionId]
-      return { running }
+      else if (running[run.sessionId]?.runId === run.id) {
+        delete running[run.sessionId]
+        // terminó algo que no estabas mirando: punto en su pestaña (un fallo no lo tapa un acierto posterior)
+        const away = run.projectId !== s.activeId || !document.hasFocus()
+        if (away && (run.status === 'completed' || run.status === 'failed'))
+          finished = { ...finished, [run.projectId]: finished[run.projectId] === 'error' || run.status === 'failed' ? 'error' : 'ok' }
+      }
+      return { running, finished }
     })
     stores.get(run.projectId)?.onRun(run)
   })
   on('limits', (l) => setApp((s) => ({ limits: { ...s.limits, [l.agent]: l } })))
   on('jev:status', (j) => setApp({ jev: j }))
+  on('cli:update', (u) => {
+    setApp((s) => ({ cliUpdates: { ...s.cliUpdates, [u.agent]: u } }))
+    // versión nueva: otra versión y, en Codex, quizá otros modelos
+    if (u.state === 'updated') refreshAgents()
+  })
+  on('self:update', (u) => setApp({ appUpdate: u }))
   on('fs:changed', (p) => stores.get(p.projectId)?.onFsChanged(p.paths))
   on('thread:meta', (t) => stores.get(t.projectId)?.upsertThread(t))
   on('queue:changed', (q) => stores.get(q.projectId)?.setQueue(q.items))
@@ -333,6 +370,7 @@ export async function initApp(runCommand: (cmd: string) => void) {
   on('web:agent-open', (p) => stores.get(p.projectId)?.openWeb(p.url))
   on('panel:closed', (p) => stores.get(p.projectId)?.set((s) => ({ popped: s.popped.filter((x) => x !== p.panel) })))
   on('menu', ({ command }) => runCommand(command))
+  on('cli:update', (u) => u.state === 'updated' && toast(`${AGENT_NAMES[u.agent]} actualizado a la ${u.installed}`, 'success'))
   on('open-path', ({ path }) => openProjectPath(path))
   on('focus-project', ({ projectId, sessionId }) => {
     activate(projectId)
@@ -343,6 +381,10 @@ export async function initApp(runCommand: (cmd: string) => void) {
   const openIds = projects.filter((p) => p.isOpen).sort((a, b) => a.tabOrder - b.tabOrder).map((p) => p.id)
   setApp({ settings, projects, limits, openIds, ready: true })
   applyTheme()
+  api.self
+    .status()
+    .then((u) => setApp({ appUpdate: u }))
+    .catch(() => {})
   const first = openIds.includes(settings.activeProjectId ?? '') ? settings.activeProjectId! : openIds[0]
   if (first) activate(first)
   refreshAgents()

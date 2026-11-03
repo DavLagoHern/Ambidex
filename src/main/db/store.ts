@@ -292,6 +292,11 @@ export class Store {
     return (this.db.prepare('SELECT * FROM queue WHERE project_id = ? ORDER BY position').all(projectId) as Row[]).map((r) => this.toQueued(r))
   }
 
+  // el primero de la cola (lo siguiente que se enviará)
+  moveQueuedToFront(id: string) {
+    this.db.prepare('UPDATE queue SET position = (SELECT COALESCE(MIN(position), 0) - 1 FROM queue) WHERE id = ?').run(id)
+  }
+
   nextQueued(target: { sessionId?: string; threadId?: string }): QueuedMessage | undefined {
     const r = target.threadId
       ? (this.db.prepare('SELECT * FROM queue WHERE thread_id = ? ORDER BY position LIMIT 1').get(target.threadId) as Row | undefined)

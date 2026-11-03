@@ -6,9 +6,9 @@ import type { AgentId, Permission, Settings } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
 import { titleFromPrompt } from '@shared/chat'
 import {
-  ACTIVE_STATUSES, conflictPrompt, FileChange, fixPrompt, normalizePlan, normalizeReview, OrchMessage, OrchStart, OrchStatus, OrchTask,
-  OrchWorktree, Orchestration, other, parseJsonLoose, PLAN_SCHEMA, planPrompt, PlanTask, REVIEW_SCHEMA, reviewPrompt, safeTestCommand,
-  slugify, taskPrompt, testFixPrompt
+  ACTIVE_STATUSES, agreementPrompt, conflictPrompt, consolidatePrompt, FileChange, finalFixPrompt, finalReviewPrompt, fixPrompt, normalizePlan,
+  normalizeReview, OrchMessage, OrchStart, OrchStatus, OrchTask, OrchWorktree, Orchestration, other, parseJsonLoose, PLAN_SCHEMA, Plan, planPrompt,
+  PlanTask, proposalPrompt, Review, REVIEW_SCHEMA, reviewPrompt, revisePlanPrompt, safeTestCommand, slugify, summaryPrompt, taskPrompt, testFixPrompt
 } from '@shared/orchestrator'
 import type { Store } from '../db/store'
 import { repoRoot } from '../git'
@@ -194,7 +194,7 @@ export class Orchestrator {
         this.check(id)
         const o = this.get(id)
         if (!o) return
-        if (o.status === 'planning') await this.plan(o)
+        if (o.status === 'planning') await (o.mode === 'C' ? this.planJoint(o) : this.plan(o))
         else if (o.status === 'running') await this.execute(id)
         else if (o.status === 'integrating') await this.integrateBranches(id)
         else if (o.status === 'testing') await this.test(id)
@@ -280,13 +280,84 @@ export class Orchestrator {
     })
     if (r.status !== 'completed') throw new Error(r.error || `${AGENT_NAMES[planner]} no pudo completar el plan`)
     const { plan, notes } = normalizePlan(r.structured ?? parseJsonLoose(r.text), o.mode, planner)
+    this.adoptPlan(o, planner, plan, notes)
+  }
+
+  // Modo C. 1) los dos proponen por separado y a la vez; 2) el planificador las junta en un plan con el reparto;
+  // 3) el otro lo revisa y, si pide ajustes, el planificador los incorpora; 4) queda el plan acordado.
+  private async planJoint(o: Orchestration) {
+    const planner = o.planner!
+    const partner = other(planner)
+    const cwd = this.agentCwd(o, o.repo)
+    this.msg(o.id, 'system', 'info', 'Fase 1 · Propuestas: cada agente propone un plan por su cuenta, sin ver el del otro.')
+    const ask = (agent: AgentId) =>
+      this.runAgent(o, { agent, cwd, title: `Propuesta de ${AGENT_NAMES[agent]} · ${titleFromPrompt(o.request)}`, prompt: proposalPrompt(o.request, agent), write: false, schema: PLAN_SCHEMA })
+    const settled = await Promise.allSettled([ask(planner), ask(partner)])
+    for (const r of settled) if (r.status === 'rejected' && r.reason instanceof Cancelled) throw r.reason
+    const proposals: { agent: AgentId; plan: Plan }[] = []
+    settled.forEach((r, i) => {
+      const agent = i === 0 ? planner : partner
+      try {
+        if (r.status !== 'fulfilled' || r.value.status !== 'completed') throw new Error(r.status === 'fulfilled' ? r.value.error || 'no terminó' : String(r.reason))
+        const { plan } = normalizePlan(r.value.structured ?? parseJsonLoose(r.value.text), 'C', agent)
+        proposals.push({ agent, plan })
+        this.msg(o.id, agent, 'plan', `${AGENT_NAMES[agent]} propone: ${plan.summary}\n${plan.tasks.length} tareas`, 'system')
+      } catch (e) {
+        this.msg(o.id, 'system', 'warning', `${AGENT_NAMES[agent]} no pudo hacer su propuesta (${(e as Error).message.split('\n')[0].slice(0, 120)}).`)
+      }
+    })
+    if (!proposals.length) throw new Error('Ninguno de los dos agentes pudo proponer un plan')
+
+    let plan: Plan
+    let notes: string[] = []
+    if (proposals.length === 1) {
+      plan = proposals[0].plan
+      this.msg(o.id, 'system', 'warning', `Solo hay una propuesta (${AGENT_NAMES[proposals[0].agent]}): se usa tal cual.`)
+    } else {
+      this.msg(o.id, 'system', 'info', `Fase 2 · Acuerdo: ${AGENT_NAMES[planner]} junta las dos propuestas en un plan y reparte el trabajo.`)
+      const best = proposals.find((p) => p.agent === planner) ?? proposals[0]
+      try {
+        const r = await this.runAgent(o, { agent: planner, cwd, title: `Plan acordado · ${titleFromPrompt(o.request)}`, prompt: consolidatePrompt(o.request, proposals), write: false, schema: PLAN_SCHEMA })
+        if (r.status !== 'completed') throw new Error(r.error || 'no terminó')
+        ;({ plan, notes } = normalizePlan(r.structured ?? parseJsonLoose(r.text), 'C', planner))
+      } catch (e) {
+        if (e instanceof Cancelled) throw e
+        plan = best.plan
+        this.msg(o.id, 'system', 'warning', `No se pudieron juntar las propuestas (${(e as Error).message.split('\n')[0].slice(0, 120)}): se usa la de ${AGENT_NAMES[best.agent]}.`)
+      }
+      this.msg(o.id, planner, 'plan', `Plan acordado: ${plan.summary}`)
+      // el otro agente da su conformidad (o pide ajustes, que se incorporan una vez)
+      try {
+        const rv = await this.runAgent(o, { agent: partner, cwd, title: `Conformidad con el plan · ${AGENT_NAMES[partner]}`, prompt: agreementPrompt(o.request, plan, planner), write: false, schema: REVIEW_SCHEMA })
+        const verdict = rv.status === 'completed' ? normalizeReview(rv.structured ?? parseJsonLoose(rv.text)) : undefined
+        if (verdict?.verdict === 'approve') this.msg(o.id, partner, 'review', `${AGENT_NAMES[partner]} está de acuerdo con el plan. ${verdict.summary}`, planner)
+        else if (verdict) {
+          this.msg(o.id, partner, 'review', `${AGENT_NAMES[partner]} pide ajustes al plan:\n${verdict.issues.map((i) => `· [${i.severity}] ${i.description}`).join('\n')}`, planner)
+          const rp = await this.runAgent(o, { agent: planner, cwd, title: `Plan · ajustes de ${AGENT_NAMES[partner]}`, prompt: revisePlanPrompt(o.request, plan, verdict, partner), write: false, schema: PLAN_SCHEMA })
+          if (rp.status === 'completed') {
+            const revised = normalizePlan(rp.structured ?? parseJsonLoose(rp.text), 'C', planner)
+            plan = revised.plan
+            notes = [...notes, ...revised.notes]
+            this.msg(o.id, planner, 'plan', `Plan ajustado: ${plan.summary}`, partner)
+          }
+        }
+      } catch (e) {
+        if (e instanceof Cancelled) throw e
+        this.msg(o.id, 'system', 'warning', `No se pudo confirmar el plan con ${AGENT_NAMES[partner]}; sigue adelante tal cual.`)
+      }
+    }
+    this.adoptPlan(o, planner, plan, notes, 'Fase 3 · Reparto')
+  }
+
+  // Guarda el plan, crea sus tareas y pasa a ejecutar (o a esperar tu aprobación)
+  private adoptPlan(o: Orchestration, planner: AgentId, plan: Plan, notes: string[], label?: string) {
     this.d.store.updateOrchestration(o.id, { plan })
     this.d.store.replaceTasks(
       o.id,
       plan.tasks.map((t) => ({ key: t.id, title: t.title, description: t.description, acceptance: t.acceptance, assignee: t.assignee, dependsOn: t.dependsOn }))
     )
     const n = (a: AgentId) => plan.tasks.filter((t) => t.assignee === a).length
-    this.msg(o.id, planner, 'plan', `${plan.summary}\n${plan.tasks.length} tareas · Claude ${n('claude')} · Codex ${n('codex')}`)
+    this.msg(o.id, planner, 'plan', `${label ? `${label}: ` : ''}${plan.summary}\n${plan.tasks.length} tareas · Claude ${n('claude')} · Codex ${n('codex')}`)
     for (const note of notes) this.msg(o.id, 'system', 'warning', note)
     this.setStatus(o.id, o.options.approvePlan ? 'awaiting_plan' : 'running')
   }
@@ -532,8 +603,76 @@ export class Orchestrator {
         this.msg(id, fixer, 'fix', `Corrige las pruebas: ${fx.text.split('\n')[0].slice(0, 200)}`)
       }
     }
+    if (o.mode === 'C') await this.wrapUp(id, wt.path, cwd, argv)
     this.msg(id, 'system', 'integration', 'Todo listo para tu revisión: mira los cambios y decide si integrarlos.')
     this.setStatus(id, 'awaiting_approval')
+  }
+
+  // Modo C, al final: los dos revisan el resultado completo; si piden ajustes, se aplican y se vuelven a pasar las
+  // pruebas; y el planificador escribe el resumen en nombre de los dos.
+  private async wrapUp(id: string, wtPath: string, cwd: string, argv?: string[]) {
+    let o = this.get(id)!
+    const planner = o.planner ?? 'claude'
+    const settle = <T,>(rs: PromiseSettledResult<T>[]) => {
+      for (const r of rs) if (r.status === 'rejected' && r.reason instanceof Cancelled) throw r.reason
+    }
+    const testNote = (): string => {
+      const t = this.get(id)!.testResult
+      return !t || t.skipped ? 'Pruebas: no hay comando de pruebas en este proyecto.' : `Pruebas (${t.command}): ${t.ok ? 'superadas' : 'FALLAN'}.`
+    }
+    const diff = await g.diff(wtPath, o.baseCommit, 'HEAD', 60000)
+    this.msg(id, 'system', 'info', 'Fase final · Revisión conjunta: cada agente comprueba el resultado completo, incluido lo que hizo el otro.')
+    const ask = (agent: AgentId, d: string) =>
+      this.runAgent(o, { agent, cwd, title: `Revisión final · ${AGENT_NAMES[agent]}`, prompt: finalReviewPrompt({ request: o.request, plan: o.plan, diff: d, reviewer: agent, testNote: testNote() }), write: false, schema: REVIEW_SCHEMA })
+    const reviewers: AgentId[] = ['claude', 'codex']
+    const settled = await Promise.allSettled(reviewers.map((a) => ask(a, diff)))
+    settle(settled)
+    const reviews: { by: AgentId; review: Review }[] = []
+    settled.forEach((r, i) => {
+      const by = reviewers[i]
+      const review = r.status === 'fulfilled' && r.value.status === 'completed' ? normalizeReview(r.value.structured ?? parseJsonLoose(r.value.text)) : undefined
+      if (!review) return this.msg(id, 'system', 'warning', `No se pudo obtener la revisión final de ${AGENT_NAMES[by]}.`)
+      reviews.push({ by, review })
+      const issues = review.issues.map((x) => `· [${x.severity}] ${x.file ? x.file + ': ' : ''}${x.description}`).join('\n')
+      this.msg(id, by, 'review', review.verdict === 'approve' ? `${AGENT_NAMES[by]} da el resultado por bueno. ${review.summary}` : `${AGENT_NAMES[by]} pide ajustes finales:\n${issues}`, 'user')
+    })
+
+    // ajustes: los aplica el planificador en la rama de integración y se vuelven a pasar las pruebas
+    const open = reviews.filter((r) => r.review.verdict === 'changes')
+    let fixed = false
+    if (open.length) {
+      this.msg(id, 'system', 'info', `${AGENT_NAMES[planner]} aplica los ajustes de la revisión final.`)
+      o = this.get(id)!
+      const fx = await this.runAgent(o, { agent: planner, cwd, title: 'Ajustes de la revisión final', prompt: finalFixPrompt(open), write: true })
+      if (fx.status === 'completed') {
+        const commit = await g.commitAll(wtPath, `ambidex(${planner}): ajustes de la revisión final`)
+        if (commit) {
+          fixed = true
+          this.msg(id, planner, 'fix', `Ajustes aplicados: ${fx.text.split('\n')[0].slice(0, 200)}`)
+          if (argv) {
+            const tr = await this.runTests(id, argv, cwd)
+            this.d.store.updateOrchestration(id, { testResult: { command: argv.join(' '), ok: tr.ok, output: tr.output, durationMs: tr.ms, round: 99 } })
+            this.msg(id, 'system', 'test', tr.ok ? 'Pruebas superadas tras los ajustes' : `Fallan las pruebas tras los ajustes (código ${tr.code ?? '—'}): revísalo antes de integrar.`)
+          }
+        }
+      } else this.msg(id, 'system', 'warning', 'No se pudieron aplicar los ajustes finales: quedan para tu revisión.')
+    }
+
+    // resumen en nombre de los dos
+    o = this.get(id)!
+    try {
+      const sm = await this.runAgent(o, {
+        agent: planner,
+        cwd,
+        title: 'Resumen del equipo',
+        prompt: summaryPrompt({ request: o.request, plan: o.plan, tasks: o.tasks, reviews, tests: testNote(), fixed }),
+        write: false
+      })
+      if (sm.status === 'completed' && sm.text.trim()) this.msg(id, planner, 'summary', sm.text.trim(), 'user')
+    } catch (e) {
+      if (e instanceof Cancelled) throw e
+      this.msg(id, 'system', 'warning', 'No se pudo redactar el resumen final.')
+    }
   }
 
   // ---------- revisión humana ----------

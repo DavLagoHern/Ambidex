@@ -79,3 +79,20 @@ describe('orquestador: validaciones', () => {
     expect(slugify('Implementa autenticación completa!')).toBe('implementa-autenticacion-com')
   })
 })
+
+describe('tipos de tarea del usuario', () => {
+  it('un tipo propio usa su nombre y su preferencia; sin preferencia, reparto de carga', async () => {
+    const { decideRoute, routeCategories, DEFAULT_CATEGORIES } = await import('../src/shared/router')
+    expect(routeCategories({})).toBe(DEFAULT_CATEGORIES)
+    const cats = [...DEFAULT_CATEGORIES, { id: 'c-pagos', label: 'Pagos', description: 'Stripe y facturación' }]
+    expect(routeCategories({ routeCategories: cats })).toHaveLength(9)
+    const base = { available: { claude: true, codex: true }, busy: { claude: false, codex: false }, usage: {}, defaultAgent: 'claude' as const }
+    const labels = Object.fromEntries(cats.map((c) => [c.id, c.label]))
+    const cls = { via: 'jev' as const, category: 'c-pagos', confidence: 0.9, followUp: false }
+    const d = decideRoute('cobro', { ...base, labels, prefs: { ...DEFAULT_ROUTE_PREFS, 'c-pagos': 'codex' } }, cls)
+    expect(d).toMatchObject({ agent: 'codex', category: 'c-pagos' })
+    expect(d.reason).toContain('Pagos → Codex')
+    // sin preferencia guardada para ese tipo: el más libre
+    expect(decideRoute('cobro', { ...base, labels, prefs: DEFAULT_ROUTE_PREFS }, cls).reason).toContain('Pagos · reparto de carga')
+  })
+})

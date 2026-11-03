@@ -7,6 +7,7 @@ import { SessionView, usePS, useStore } from '../../lib/project-store'
 import { basename, durationText, errMsg, fmtTokens, fuzzyScore, relPath, toolName } from '../../lib/utils'
 import { AgentLogo, Icon } from '../Icons'
 import { Markdown } from '../Markdown'
+import { imageMenu } from '../../lib/image-menu'
 
 export const CLAUDE_MODES: { id: ClaudeMode; label: string; hint: string }[] = [
   { id: 'plan', label: 'Plan', hint: 'Solo lectura: analiza y propone' },
@@ -14,12 +15,12 @@ export const CLAUDE_MODES: { id: ClaudeMode; label: string; hint: string }[] = [
   { id: 'auto', label: 'Auto', hint: 'Un clasificador permite lo seguro y bloquea lo arriesgado' },
   { id: 'dontAsk', label: 'No preguntar', hint: 'Deniega todo lo que necesitaría permiso' },
   { id: 'manual', label: 'Manual', hint: 'Solo lo permitido en tu configuración de Claude Code' },
-  { id: 'bypassPermissions', label: 'Sin límites', hint: 'Sin permisos (actívalo en Ajustes)' }
+  { id: 'bypassPermissions', label: 'Sin límites', hint: 'Sin pedir permiso para nada: puede ejecutar y cambiar lo que quiera' }
 ]
 export const CODEX_SANDBOX: { id: CodexSandbox; label: string; hint: string }[] = [
   { id: 'read-only', label: 'Solo lectura', hint: 'No puede modificar ficheros' },
   { id: 'workspace-write', label: 'Workspace', hint: 'Puede editar dentro de la carpeta de trabajo' },
-  { id: 'danger-full-access', label: 'Acceso total', hint: 'Sin sandbox (actívalo en Ajustes)' }
+  { id: 'danger-full-access', label: 'Acceso total', hint: 'Sin sandbox: puede ejecutar y cambiar lo que quiera' }
 ]
 const EFFORT_LABELS: Record<string, string> = {
   low: 'Bajo',
@@ -141,21 +142,63 @@ async function undoTurn(run: RunInfo) {
   if (r) toast(`Deshecho: ${r.restored.length} restaurados, ${r.deleted.length} borrados${r.skipped.length ? `, ${r.skipped.length} sin tocar` : ''}`, 'success')
 }
 
-// Al final de cada turno que cambió ficheros (solo en repositorios de Git, que es donde se hacen las fotos)
-export function TurnUndo({ sessionId, at }: { sessionId: string; at: number }) {
-  const run = useStore((s) => s.runs.find((r) => r.sessionId === sessionId && r.startedAt === at))
-  if (!run?.undo) return null
-  if (run.undo === 'done')
-    return (
-      <div className="turn-undo done">
-        <Icon.undo size={11} /> Cambios de este turno deshechos
-      </div>
-    )
+// Lo último que dijo el agente en un turno (su respuesta), para copiarla
+export const finalAnswer = (items: ChatItem[]): string | undefined => {
+  const a = items.findLast((i) => i.type === 'assistant')
+  return a && a.type === 'assistant' && a.text.trim() ? a.text : undefined
+}
+
+// Copia un texto al portapapeles y avisa
+export async function copyText(text: string, what = 'Copiado') {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(what, 'success')
+  } catch (e) {
+    toast(`No se pudo copiar: ${errMsg(e)}`, 'error')
+  }
+}
+
+// Botón de copiar: pasa a «Copiado» un instante
+export function CopyButton({ text, label, title = 'Copiar', className = 'btn ghost small' }: { text: string; label?: string; title?: string; className?: string }) {
+  const [done, setDone] = useState(false)
   return (
-    <div className="turn-undo">
-      <button className="btn ghost small" title="Vuelve los ficheros a como estaban antes de este turno (te enseña cuáles antes de hacerlo)" onClick={() => undoTurn(run)}>
-        <Icon.undo size={12} /> Deshacer los cambios de este turno
-      </button>
+    <button
+      className={className}
+      title={title}
+      onClick={async (e) => {
+        e.stopPropagation()
+        try {
+          await navigator.clipboard.writeText(text)
+          setDone(true)
+          setTimeout(() => setDone(false), 1400)
+        } catch (err) {
+          toast(`No se pudo copiar: ${errMsg(err)}`, 'error')
+        }
+      }}
+    >
+      {done ? <Icon.check size={12} /> : <Icon.copy size={12} />} {done ? 'Copiado' : label}
+    </button>
+  )
+}
+
+// Al final de cada turno: copiar la respuesta y, si cambió ficheros (solo en repositorios de Git, que es donde se
+// hacen las fotos), deshacer los cambios
+export function TurnUndo({ sessionId, at, answer }: { sessionId: string; at: number; answer?: string }) {
+  const run = useStore((s) => s.runs.find((r) => r.sessionId === sessionId && r.startedAt === at))
+  if (!run?.undo && !answer) return null
+  return (
+    <div className={`turn-undo ${run?.undo === 'done' ? 'done' : ''}`}>
+      {answer && <CopyButton text={answer} label="Copiar respuesta" title="Copiar la respuesta (en Markdown)" />}
+      {run?.undo === 'done' && (
+        <>
+          <Icon.undo size={11} /> Cambios de este turno deshechos
+        </>
+      )}
+      {run?.undo === 'available' && (
+        <button className="btn ghost small" title="Vuelve los ficheros a como estaban antes de este turno (te enseña cuáles antes de hacerlo)" onClick={() => undoTurn(run)}>
+          <Icon.undo size={12} /> Deshacer los cambios de este turno
+        </button>
+      )}
     </div>
   )
 }
@@ -178,7 +221,7 @@ function SentImage({ path }: { path: string }) {
   }, [path])
   if (missing) return <span className="sent-img missing">imagen no disponible</span>
   return (
-    <button className="sent-img" title="Ver la imagen" onClick={() => url && setApp({ lightbox: url })}>
+    <button className="sent-img" title="Ver la imagen (clic derecho: copiar)" onClick={() => url && setApp({ lightbox: url })} onContextMenu={(e) => imageMenu(e, url, { view: true })}>
       {url && <img src={url} alt="" draggable={false} />}
     </button>
   )
@@ -202,7 +245,10 @@ export const Item = memo(function Item({ item, session }: { item: ChatItem; sess
       return (
         <div className="msg-user-wrap">
           <SentImages paths={item.images} />
-          <div className="msg-user">{item.text}</div>
+          <div className="msg-user-line">
+            <CopyButton text={item.text} title="Copiar el mensaje" className="icon-btn msg-copy" />
+            <div className="msg-user">{item.text}</div>
+          </div>
           {item.context && <ContextChipView context={item.context} />}
         </div>
       )
@@ -289,6 +335,71 @@ export const Item = memo(function Item({ item, session }: { item: ChatItem; sess
       )
   }
 })
+
+// ---------- turno terminado: los pasos intermedios en una sola fila ----------
+
+type Step = Extract<ChatItem, { type: 'tool' | 'thinking' | 'assistant' }>
+type TurnEntry = { kind: 'item'; item: ChatItem } | { kind: 'steps'; key: string; steps: Step[] }
+
+// Mientras trabaja se ve todo; al acabar, herramientas, razonamiento y textos intermedios se pliegan en una fila
+// (donde estaba el primero) y queda a la vista la respuesta final con los ficheros, avisos y errores
+export function collapseTurn(items: ChatItem[], done: boolean): TurnEntry[] {
+  if (!done) return items.map((item) => ({ kind: 'item', item }))
+  const final = items.findLast((i) => i.type === 'assistant')
+  const out: TurnEntry[] = []
+  let group: Extract<TurnEntry, { kind: 'steps' }> | null = null
+  for (const it of items) {
+    if ((it.type === 'tool' || it.type === 'thinking' || it.type === 'assistant') && it !== final) {
+      if (!group) {
+        group = { kind: 'steps', key: `steps-${it.id}`, steps: [] }
+        out.push(group)
+      }
+      group.steps.push(it)
+    } else out.push({ kind: 'item', item: it })
+  }
+  // un único paso no merece plegarse
+  return out.flatMap<TurnEntry>((e) => (e.kind === 'steps' && e.steps.length === 1 ? [{ kind: 'item' as const, item: e.steps[0] }] : [e]))
+}
+
+const Steps = memo(function Steps({ steps, session }: { steps: Step[]; session: SessionView }) {
+  const [open, setOpen] = useState(false)
+  const tools = steps.filter((s): s is Extract<Step, { type: 'tool' }> => s.type === 'tool')
+  const failed = tools.filter((t) => t.status === 'error').length
+  const counts = new Map<string, number>()
+  for (const t of tools) counts.set(toolName(t.name), (counts.get(toolName(t.name)) ?? 0) + 1)
+  const summary = [...counts].sort((a, b) => b[1] - a[1]).map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))
+  const label = tools.length ? `${tools.length} ${tools.length === 1 ? 'acción' : 'acciones'}` : `${steps.length} pasos`
+  return (
+    <div className={`steps ${open ? 'open' : ''}`}>
+      <button className="steps-head" onClick={() => setOpen(!open)} title={open ? 'Ocultar los pasos' : 'Ver los pasos de este turno'}>
+        <Icon.chevronRight size={12} className="tool-chevron" />
+        <span className="steps-label">{label}</span>
+        {summary.length > 0 && <span className="steps-summary ellipsis">{summary.join(' · ')}</span>}
+        {failed > 0 && (
+          <span className="steps-failed">
+            <Icon.fail size={11} /> {failed}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="steps-body">
+          {steps.map((it) => (
+            <Item key={it.id} item={it} session={session} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+
+export function TurnItems({ items, session, done }: { items: ChatItem[]; session: SessionView; done: boolean }) {
+  const entries = useMemo(() => collapseTurn(items, done), [items, done])
+  return (
+    <>
+      {entries.map((e) => (e.kind === 'steps' ? <Steps key={e.key} steps={e.steps} session={session} /> : <Item key={e.item.id} item={e.item} session={session} />))}
+    </>
+  )
+}
 
 export function Elapsed({ since }: { since: number }) {
   const [, tick] = useState(0)
@@ -471,7 +582,7 @@ export function useAttachments() {
   const strip = images.length ? (
     <div className="attach-strip">
       {images.map((i) => (
-        <div key={i.path} className="attach">
+        <div key={i.path} className="attach" onContextMenu={(e) => imageMenu(e, i.url, { view: true })}>
           <img src={i.url} alt="" draggable={false} />
           <button className="attach-x" title="Quitar" onClick={() => setImages((l) => l.filter((x) => x.path !== i.path))}>
             <Icon.x size={10} />
@@ -590,13 +701,38 @@ export function useFileDrop(setText: (fn: (t: string) => string) => void, onImag
 }
 
 // Modelo, razonamiento y permisos de un agente: de la conversación si existe, si no los valores por defecto
-export function AgentPills({ agent, session, compact }: { agent: AgentId; session?: SessionView; compact?: boolean }) {
+// Nombre corto de un modelo para los chips: «Opus 5.5», «GPT-6.1-Sol»
+export function useModelLabel() {
+  const infos = useApp((s) => s.agentInfo)
+  return (agent: AgentId, id: string) => (infos.find((i) => i.agent === agent)?.models.find((m) => m.id === id)?.label ?? id).replace(/^Claude /, '')
+}
+
+// `unified`: el chat único. Con el modelo según la dificultad, «Auto» deja que lo elija cada mensaje y solo se
+// ofrecen los modelos permitidos; con el razonamiento automático, «Auto · Medio» igual. Sin conversación de ese
+// agente aún, lo que elijas se guarda en `pin` hasta el primer mensaje.
+export function AgentPills({
+  agent,
+  session,
+  compact,
+  unified,
+  pin
+}: {
+  agent: AgentId
+  session?: SessionView
+  compact?: boolean
+  unified?: boolean
+  pin?: { model: string; effort: string; set: (key: 'model' | 'effort', value: string) => void }
+}) {
   const ps = usePS()
   const settings = useApp((s) => s.settings)
   const info = useApp((s) => s.agentInfo.find((i) => i.agent === agent))
-  const allow = !!settings?.allowUnrestricted
+  const policy = settings?.modelPolicy
+  const auto = !!unified && !!policy?.auto
+  const autoEffort = !!unified && policy?.autoEffort !== false
   const patch = (key: 'model' | 'effort' | 'permission', value: string) => {
-    if (session) ps.updateSession(session.id, { [key]: value })
+    if (key === 'model' && auto && !session && pin) pin.set('model', value)
+    else if (key === 'effort' && autoEffort && !session && pin) pin.set('effort', value)
+    else if (session) ps.updateSession(session.id, { [key]: value })
     else {
       const map = {
         model: agent === 'claude' ? 'claudeModel' : 'codexModel',
@@ -606,8 +742,9 @@ export function AgentPills({ agent, session, compact }: { agent: AgentId; sessio
       saveSettings({ [map[key]]: value })
     }
   }
-  const model = session ? (session.model ?? '') : ((agent === 'claude' ? settings?.claudeModel : settings?.codexModel) ?? '')
-  const effort = session ? (session.effort ?? '') : ((agent === 'claude' ? settings?.claudeEffort : settings?.codexEffort) ?? '')
+  const model = session ? (session.model ?? '') : auto && pin ? pin.model : ((agent === 'claude' ? settings?.claudeModel : settings?.codexModel) ?? '')
+  const models = auto ? (info?.models ?? []).filter((m) => !m.id || m.id === model || policy![agent].allowed.includes(m.id)) : info?.models
+  const effort = session ? (session.effort ?? '') : autoEffort && pin ? pin.effort : ((agent === 'claude' ? settings?.claudeEffort : settings?.codexEffort) ?? '')
   const permission: Permission | undefined = session?.permission ?? (agent === 'claude' ? settings?.claudeMode : settings?.codexSandbox)
   const modelInfo = info?.models.find((m) => m.id === model) ?? info?.models[0]
   const efforts = modelInfo?.efforts ?? []
@@ -615,21 +752,30 @@ export function AgentPills({ agent, session, compact }: { agent: AgentId; sessio
   const mode = modes.find((m) => m.id === permission)
   return (
     <>
-      <label className="pill" title={`Modelo de ${AGENT_NAMES[agent]}`}>
+      <label className="pill" title={auto && !model ? 'Auto: el modelo se elige en cada mensaje según su dificultad (Ajustes → Modelos)' : `Modelo de ${AGENT_NAMES[agent]}`}>
         <Icon.cpu size={12} />
         <select value={model} onChange={(e) => patch('model', e.target.value)}>
-          {info?.models.map((m) => (
+          {models?.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.label}
+              {auto && !m.id ? 'Auto' : m.label}
             </option>
           ))}
           {model && !info?.models.some((m) => m.id === model) && <option value={model}>{model}</option>}
         </select>
       </label>
-      <label className="pill" title="Nivel de razonamiento: más alto = mejor en tareas difíciles, más lento y consume más límite">
+      <label
+        className="pill"
+        title={
+          autoEffort && !effort
+            ? 'Auto: medio por defecto. Jev lo sube a alto solo si ve clara una tarea difícil (o lo baja con una sencilla); los niveles por encima de alto solo si los eliges tú'
+            : 'Nivel de razonamiento: más alto = mejor en tareas difíciles, más lento y consume más límite'
+        }
+      >
         <Icon.brain size={12} />
         <select value={effort} onChange={(e) => patch('effort', e.target.value)}>
-          <option value="">{compact ? 'Razonamiento' : `Razonamiento${modelInfo?.defaultEffort ? ` (${EFFORT_LABELS[modelInfo.defaultEffort] ?? modelInfo.defaultEffort})` : ''}`}</option>
+          <option value="">
+            {autoEffort ? 'Auto · Medio' : compact ? 'Razonamiento' : `Razonamiento${modelInfo?.defaultEffort ? ` (${EFFORT_LABELS[modelInfo.defaultEffort] ?? modelInfo.defaultEffort})` : ''}`}
+          </option>
           {efforts.map((x) => (
             <option key={x} value={x}>
               {EFFORT_LABELS[x] ?? x}
@@ -637,16 +783,14 @@ export function AgentPills({ agent, session, compact }: { agent: AgentId; sessio
           ))}
         </select>
       </label>
-      <label className={`pill ${permission && UNRESTRICTED.includes(permission) ? 'danger' : ''}`} title={mode?.hint}>
+      <label className={`pill ${permission && UNRESTRICTED.includes(permission) ? 'unrestricted' : ''}`} title={mode?.hint}>
         <Icon.shield size={12} />
         <select value={permission} onChange={(e) => patch('permission', e.target.value)}>
-          {modes
-            .filter((m) => allow || !UNRESTRICTED.includes(m.id) || m.id === permission)
-            .map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
+          {modes.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
         </select>
       </label>
     </>
@@ -685,7 +829,7 @@ export function QueueList({ items }: { items: QueuedMessage[] }) {
               {q.prompt}
             </span>
           )}
-          <button className="icon-btn" title="Enviar ya (si el agente está libre)" onClick={() => ps.sendQueuedNow(q.id)}>
+          <button className="icon-btn" title="Enviar ya (si el agente está trabajando, te pregunta si detenerlo)" onClick={() => ps.sendQueuedNow(q.id)}>
             <Icon.send size={12} />
           </button>
           <button className="icon-btn" title="Quitar de la cola" onClick={() => ps.removeQueued(q.id)}>

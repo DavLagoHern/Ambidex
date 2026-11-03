@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, nativeImage, nativeTheme, Notification, shell } from 'electron'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, openSync, readFileSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { basename, join } from 'path'
 import type { PushChannel, PushContract } from '@shared/ipc'
@@ -12,10 +12,13 @@ import { Store } from './db/store'
 import { claudeAdapter } from './agents/claude'
 import { codexDefaultModel, codexHome, CodexModels, createCodexAdapter, latestCodexLimits, readCodexModels } from './agents/codex'
 import { detectAgents, loginCommand, resolveBin } from './agents/detect'
-import { agentEnv, loadShellPath } from './agents/env'
+import { agentEnv, binVersion, loadShellPath, run } from './agents/env'
 import { oneShot } from './agents/oneshot'
 import { SessionService } from './agents/service'
 import { Dispatcher } from './agents/dispatcher'
+import { claudeChannel, CliUpdater } from './agents/updates'
+import { AppUpdater, type Exec } from './app-update'
+import { difficultyCriteria, routeCategories } from '@shared/router'
 import { Orchestrator } from './orchestrator/engine'
 import * as files from './files'
 import * as gitApi from './git'
@@ -57,6 +60,10 @@ let service: SessionService
 let dispatcher: Dispatcher
 let orchestrator: Orchestrator
 let jev: Jev
+let updater: CliUpdater
+let appUpdater: AppUpdater
+// «Reiniciar» en el aviso de versión nueva: tras instalarla, se vuelve a abrir
+let reopenAfterUpdate = false
 // herramientas MCP para que los agentes usen la pestaña Web de su proyecto
 const webAgent = createWebAgent({
   tab: projectTab,
@@ -98,9 +105,73 @@ function push<K extends PushChannel>(channel: K, payload: PushContract[K]) {
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && isAppUrl(w.webContents.getURL())) w.webContents.send(channel, payload)
 }
 
+// Jev tarda ~4 s en arrancar y al enviar solo se le esperan 3: se despierta antes (al abrir y al escribir), sin preguntar nada
+function warmJev() {
+  if (settings().routerMode !== 'jev' || !jev?.installed()) return
+  jev.ensure().catch((e) => logger.warn('jev.warm', { error: (e as Error).message }))
+}
+
+// ---------- actualización de Ambidex ----------
+
+// carpeta del clon desde el que se compiló (solo en la app instalada: en desarrollo no se actualiza sola)
+const SOURCE = app.isPackaged && !process.env.AMBIDEX_USER_DATA ? __AMBIDEX_SOURCE__ : undefined
+const updateLog = () => {
+  const dir = join(app.getPath('userData'), 'logs')
+  mkdirSync(dir, { recursive: true })
+  return join(dir, 'update.log')
+}
+
+// git/npm en el clon, con la salida en logs/update.log; npm a prioridad baja para no frenar el trabajo
+function sourceExec(file: string, args: string[], timeout: number): Promise<Exec> {
+  return new Promise((resolve) => {
+    const out = createWriteStream(updateLog(), { flags: 'a' })
+    out.write(`\n[${new Date().toISOString()}] $ ${file} ${args.join(' ')}\n`)
+    let stdout = ''
+    let stderr = ''
+    const done = (code: number) => {
+      clearTimeout(timer)
+      out.end()
+      resolve({ code, stdout, stderr })
+    }
+    const p = spawn(file, args, { cwd: SOURCE, env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0' } })
+    const timer = setTimeout(() => p.kill('SIGTERM'), timeout)
+    p.stdout.on('data', (d) => {
+      const t = String(d)
+      if (stdout.length < 1_000_000) stdout += t
+      out.write(t)
+    })
+    p.stderr.on('data', (d) => {
+      const t = String(d)
+      stderr = (stderr + t).slice(-4000)
+      out.write(t)
+    })
+    p.on('error', (e) => ((stderr += e.message), done(1)))
+    p.on('close', (code) => done(code ?? 1))
+  })
+}
+
+// Al salir con una versión ya compilada: el instalador del clon espera a que se cierre la app, la reemplaza en
+// /Applications y (si se pidió con «Reiniciar») la vuelve a abrir. Va suelto para sobrevivir a la app.
+function installUpdate() {
+  if (!SOURCE || appUpdater?.status().state !== 'ready' || (!reopenAfterUpdate && settings().autoUpdateApp === false)) return
+  try {
+    const log = openSync(updateLog(), 'a')
+    const p = spawn('node', ['scripts/install-app.mjs'], {
+      cwd: SOURCE,
+      detached: true,
+      stdio: ['ignore', log, log],
+      env: { ...childEnv(), AMBIDEX_NO_OPEN: reopenAfterUpdate ? '' : '1' }
+    })
+    p.unref()
+    logger.info('app.update.install', { reopen: reopenAfterUpdate })
+  } catch (e) {
+    logger.error('app.update.install', { error: (e as Error).message })
+  }
+}
+
 // ---------- paneles en otra ventana ----------
 
-const POPOUT_PANELS = ['chat', 'terminal', 'editor', 'agents']
+const POPOUT_PANELS = ['chat', 'terminal', 'editor', 'agents', 'activity']
 const panelWins = new Map<string, BrowserWindow>()
 
 function openPanelWindow(projectId: string, panel: string) {
@@ -109,7 +180,7 @@ function openPanelWindow(projectId: string, panel: string) {
   const open = panelWins.get(key)
   if (open && !open.isDestroyed()) return open.focus()
   const w = new BrowserWindow({
-    width: panel === 'agents' ? 420 : 980,
+    width: panel === 'agents' || panel === 'activity' ? 420 : 980,
     height: 680,
     minWidth: 360,
     minHeight: 260,
@@ -325,6 +396,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Barra lateral', accelerator: 'CmdOrCtrl+B', click: cmd('toggle-sidebar') },
         { label: 'Agentes', accelerator: 'CmdOrCtrl+Alt+B', click: cmd('toggle-right') },
+        { label: 'Actividad', click: cmd('toggle-activity') },
         { label: 'Terminal', accelerator: 'CmdOrCtrl+J', click: cmd('toggle-bottom') },
         { label: 'Restablecer diseño', click: cmd('reset-layout') },
         { label: 'Alternar chat / código', accelerator: 'CmdOrCtrl+E', click: cmd('toggle-layout') },
@@ -424,6 +496,7 @@ function handlers(): Handlers {
       const next = store.saveSettings(patch)
       if (patch.theme) nativeTheme.themeSource = next.theme
       if (patch.claudePath !== undefined || patch.codexPath !== undefined || patch.stripApiKeys !== prev.stripApiKeys) refreshAgents()
+      if (patch.autoUpdateClis && !prev.autoUpdateClis) updater.check(true).catch(() => {})
       return next
     },
 
@@ -476,6 +549,7 @@ function handlers(): Handlers {
       return { runId }
     },
     'sessions:cancel': (id) => service.cancel(id),
+    'sessions:compact': (id) => void service.compact(id),
     'runs:undoPreview': async (runId) => {
       const c = undoable(runId)
       const plan = await undoPlan(c.cwd, c.before, c.after)
@@ -524,7 +598,11 @@ function handlers(): Handlers {
       if (settings().routerMode === 'jev') store.saveSettings({ routerMode: 'rules' })
       return settings()
     },
-    'jev:test': (text) => jev.test(text),
+    'jev:warm': () => warmJev(),
+    'jev:test': (text) => {
+      const s = settings()
+      return jev.test(text, { categories: Object.fromEntries(routeCategories(s).map((c) => [c.id, c.description.trim() || c.label])), difficultyCriteria: difficultyCriteria(s) })
+    },
     'threads:send': async (threadId, text, opts) => {
       const r = await dispatcher.sendThread(threadId, text, opts)
       updateDockBadge()
@@ -535,7 +613,7 @@ function handlers(): Handlers {
     'queue:add': (m) => dispatcher.enqueue(m),
     'queue:remove': (id) => dispatcher.remove(id),
     'queue:update': (id, prompt) => dispatcher.update(id, prompt),
-    'queue:sendNow': (id) => dispatcher.sendNow(id),
+    'queue:sendNow': (id, interrupt) => dispatcher.sendNow(id, interrupt),
 
     'orch:list': (projectId) => orchestrator.list(projectId),
     'orch:get': (id) => orchestrator.get(id),
@@ -567,6 +645,16 @@ function handlers(): Handlers {
       if (!bin) throw new Error(`No se encontró el CLI de ${AGENT_NAMES[agent]}`)
       const fallback = agent === 'codex' ? codexDefault() : undefined
       return oneShot({ agent, bin, cwd: guard.check(cwd), prompt, stdin, model: model || fallback, env: childEnv() })
+    },
+    'cli:updates': () => updater.status(),
+    'cli:check': () => updater.check(settings().autoUpdateClis !== false),
+    'cli:update': (agent) => updater.checkOne(agent, true),
+    'self:status': () => appUpdater.status(),
+    'self:check': () => appUpdater.check(),
+    'self:restart': () => {
+      if (appUpdater.status().state !== 'ready') throw new Error('No hay ninguna versión nueva lista')
+      reopenAfterUpdate = true
+      app.quit()
     },
 
     'fs:list': (dir) => files.listDir(guard.check(dir)),
@@ -753,7 +841,6 @@ app.whenReady().then(() => {
     env: childEnv,
     // se calcula al enviar (no depende de que haya terminado la detección del arranque)
     defaultModel: (agent) => (agent === 'codex' ? codexDefault() : undefined),
-    allowUnrestricted: () => settings().allowUnrestricted,
     checkImage: (p) => checkImage(attachmentsDir(), p),
     checkpoint: (cwd) => snapshot(cwd),
     // una sesión de Claude abierta en otra terminal no se continúa encima: se bifurca
@@ -764,6 +851,11 @@ app.whenReady().then(() => {
       const token = webAgent.grant({ projectId, runId, agent })
       return { ...agentMcpArgs(agent, webAgent.url), env: { [WEB_TOKEN_ENV]: token }, release: () => webAgent.revoke(token) }
     },
+    // Claude Code compacta solo al llegar a este contexto (0: su ventana completa); Codex, por extraArgs
+    agentEnv: (agent): Record<string, string> => {
+      const n = settings().autoCompact
+      return agent === 'claude' && n > 0 ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(Math.round(n)) } : {}
+    },
     onFinished: notifyFinished,
     onIdle: (s) => dispatcher.onIdle(s),
     extraArgs: (agent) => {
@@ -771,6 +863,7 @@ app.whenReady().then(() => {
       if (agent !== 'codex') return []
       const extra: string[] = []
       if (s.codexNetwork) extra.push('-c', 'sandbox_workspace_write.network_access=true')
+      if (s.autoCompact > 0) extra.push('-c', `model_auto_compact_token_limit=${Math.round(s.autoCompact)}`)
       if (s.codexWebSearch !== 'default') extra.push('-c', `web_search="${s.codexWebSearch}"`)
       return extra
     }
@@ -783,6 +876,7 @@ app.whenReady().then(() => {
     settings,
     available,
     jev,
+    models: (agent) => agentInfo.find((a) => a.agent === agent)?.models,
     // enrutado con IA: un modelo rápido, sin herramientas
     aiRoute: (prompt, cwd) => {
       const bin = resolveBin('claude', settings())
@@ -791,6 +885,39 @@ app.whenReady().then(() => {
     }
   })
   orchestrator = new Orchestrator({ store, service, push, settings, worktreeBase, env: childEnv })
+  updater = new CliUpdater({
+    bin: (agent) => resolveBin(agent, settings()),
+    version: binVersion,
+    run: (file, args) => run(file, args, { env: { ...childEnv(), HOMEBREW_NO_ENV_HINTS: '1' }, timeout: 10 * 60_000 }),
+    busy: (agent) => service.agentBusy(agent),
+    onStatus: (s) => push('cli:update', s),
+    // la versión nueva puede traer otros modelos (el catálogo de Codex depende de la versión del CLI)
+    onUpdated: (agent, from, to) => {
+      store.audit(null, 'system', 'cli.update', { agent, from, to })
+      return refreshAgents()
+    },
+    log: (m, d) => logger.info(m, d),
+    channel: (agent) => (agent === 'claude' ? claudeChannel() : 'latest')
+  })
+  // los E2E usan un directorio de datos aislado y CLI de prueba: ahí no se actualiza nada
+  if (!process.env.AMBIDEX_USER_DATA) updater.start(() => settings().autoUpdateClis !== false)
+  appUpdater = new AppUpdater({
+    source: SOURCE,
+    builtCommit: SOURCE ? __AMBIDEX_COMMIT__ || undefined : undefined,
+    exists: existsSync,
+    git: (args) => sourceExec('git', args, 2 * 60_000),
+    npm: (args) => sourceExec('/usr/bin/nice', ['-n', '10', 'npm', ...args], 20 * 60_000),
+    version: () => {
+      try {
+        return JSON.parse(readFileSync(join(SOURCE!, 'package.json'), 'utf8')).version
+      } catch {
+        return undefined
+      }
+    },
+    onStatus: (s) => push('self:update', s),
+    log: (m, d) => logger.info(m, d)
+  })
+  if (SOURCE) appUpdater.start(() => settings().autoUpdateApp !== false)
   const recovered = service.recoverInterrupted()
   const recoveredOrch = orchestrator.recover()
   logger.info('app.start', { version: app.getVersion(), recoveredRuns: recovered, recoveredOrchestrations: recoveredOrch })
@@ -806,6 +933,7 @@ app.whenReady().then(() => {
   buildMenu()
   createWindow()
   refreshAgents().catch((e) => logger.error('agent.detect', { error: (e as Error).message }))
+  setTimeout(warmJev, 3000)
 
   // el Dock reabre la ventana principal aunque quede alguna ventana web flotante
   app.on('activate', () => {
@@ -826,10 +954,15 @@ app.on('before-quit', (e) => {
       defaultId: 1,
       cancelId: 1
     })
-    if (r !== 0) return e.preventDefault()
+    if (r !== 0) {
+      reopenAfterUpdate = false
+      return e.preventDefault()
+    }
   }
   e.preventDefault()
   quitting = true
+  updater?.stop()
+  appUpdater?.stop()
   const timeout = new Promise((r) => setTimeout(r, 4000))
   Promise.race([Promise.all([service.cancelAll(), jev?.stop()]), timeout]).finally(() => {
     term.killAllTerminals()
@@ -840,6 +973,7 @@ app.on('before-quit', (e) => {
       /* ya cerrada */
     }
     logger.info('app.quit')
+    installUpdate()
     app.quit()
   })
 })

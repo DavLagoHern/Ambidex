@@ -6,7 +6,8 @@ import { arch, cpus, platform } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import type { JevStatus, JevTest, RouteCategory } from '@shared/types'
+import type { JevStatus, JevTest, ModelTier, RouteCategory } from '@shared/types'
+import { CATEGORY_CRITERIA, DIFFICULTY_CRITERIA } from '@shared/router'
 import type { Classification } from '@shared/router'
 import { killGroup, pidMatches } from './agents/runner'
 
@@ -18,26 +19,26 @@ export const JEV_RELEASE = 'jevos-v5'
 export const JEV_SOURCE = 'https://github.com/feder-cr/jev'
 export const JEV_ASSETS = { bin: 'jev-macos-arm64.tar.gz', model: `${JEV_RELEASE}-openvino-int8.zip`, sums: 'SHA256SUMS.txt' }
 
-// Lo que se le pregunta: tipo de tarea (choice) y si el mensaje continúa la petición anterior (sí/no)
-export const JEV_CATEGORIES: Record<RouteCategory, string> = {
-  plan: 'plan or design the architecture, propose an approach or a roadmap',
-  explain: 'explain code or concepts, answer a question, write documentation',
-  frontend: 'user interface: screens, layout, styles, CSS, visual components, responsive design',
-  implement: 'write new code, add a feature, refactor or migrate code',
-  debug: 'fix an error, a crash, a failing build or something that does not work',
-  tests: 'write, fix or run tests',
-  review: 'review code, look for bugs or security problems in existing changes',
-  terminal: 'terminal commands, shell scripts, installing dependencies, docker, CI or deployment'
-}
+// Lo que se le pregunta: tipo de tarea (choice), si el mensaje continúa la petición anterior (sí/no) y su dificultad.
+// Los criterios de serie viven en el enrutador compartido; el usuario los puede editar y ampliar (JevContext).
+export const JEV_CATEGORIES = CATEGORY_CRITERIA
+export const JEV_DIFFICULTY = DIFFICULTY_CRITERIA
 const CATEGORY_Q = 'The message is a request to an AI coding assistant. Which kind of task does it ask for?'
 const FOLLOWUP_Q =
   'Does the message continue or depend on the previous request in the conversation (like "yes, do it", "and now…", "the same for…") rather than start a new independent task?'
+const DIFFICULTY_Q =
+  'How demanding is the work the message asks an AI coding assistant to do? If the message continues the previous request, judge the work that request needs.'
 // por debajo de esta confianza el tipo de tarea no se usa (0 = reparto uniforme, 1 = seguro)
 const MIN_CONFIDENCE = 0.2
 
 export interface JevContext {
   previousAgent?: string
   previousRequest?: string
+  // preguntar también la dificultad (para elegir el modelo y el razonamiento)
+  difficulty?: boolean
+  // criterios del usuario: tipos de tarea (id → descripción) y dificultad; sin ellos, los de serie
+  categories?: Record<RouteCategory, string>
+  difficultyCriteria?: Record<ModelTier, string>
 }
 
 export interface JevDeps {
@@ -103,7 +104,7 @@ export class Jev {
   private idle?: ReturnType<typeof setTimeout>
   private abort?: AbortController
   private st: JevStatus
-  private cache = new Map<string, Classification & { probabilities: Partial<Record<RouteCategory, number>>; followP?: number }>()
+  private cache = new Map<string, Classification & { probabilities: Partial<Record<RouteCategory, number>>; followP?: number; tierConfidence?: number }>()
   private fetch: typeof fetch
 
   constructor(private d: JevDeps) {
@@ -344,32 +345,38 @@ export class Jev {
     return j.answers
   }
 
-  // Tipo de tarea y si continúa la conversación. Las respuestas se guardan un rato: la vista previa mientras
-  // se escribe y el envío hacen la misma pregunta.
+  // Tipo de tarea, si continúa la conversación y (si se pide) su dificultad, en una sola petición. Las
+  // respuestas se guardan un rato: la vista previa mientras se escribe y el envío hacen la misma pregunta.
   async classify(text: string, ctx: JevContext, timeoutMs = 4000) {
     const state: Record<string, unknown> = { message: text.slice(0, 3000) }
     if (ctx.previousAgent) {
       state.previous_agent = ctx.previousAgent
       if (ctx.previousRequest) state.previous_request = ctx.previousRequest.slice(0, 600)
     }
-    const key = JSON.stringify(state)
+    const categories = ctx.categories && Object.keys(ctx.categories).length ? ctx.categories : JEV_CATEGORIES
+    const levels = ctx.difficultyCriteria ?? JEV_DIFFICULTY
+    const key = JSON.stringify([state, !!ctx.difficulty, categories, ctx.difficulty ? levels : null])
     const hit = this.cache.get(key)
     if (hit) return { ...hit, ms: 0 }
-    const questions: Record<string, unknown> = { category: { type: 'choice', instructions: CATEGORY_Q, criteria: JEV_CATEGORIES } }
+    const questions: Record<string, unknown> = { category: { type: 'choice', instructions: CATEGORY_Q, criteria: categories } }
     if (ctx.previousAgent) questions.followup = { type: 'noul', instructions: FOLLOWUP_Q }
+    if (ctx.difficulty) questions.difficulty = { type: 'choice', instructions: DIFFICULTY_Q, criteria: levels }
     const t0 = Date.now()
     const a = await this.ask(state, questions, timeoutMs)
     const ms = Date.now() - t0
     const cat = a.category
     const confidence = cat?.confidence
-    const category = cat?.choice && cat.choice in JEV_CATEGORIES && (confidence ?? 0) >= MIN_CONFIDENCE ? (cat.choice as RouteCategory) : undefined
+    const category = cat?.choice && cat.choice in categories && (confidence ?? 0) >= MIN_CONFIDENCE ? (cat.choice as RouteCategory) : undefined
     const followP = a.followup?.noul
+    const dif = a.difficulty
     const out = {
       via: 'jev' as const,
       category,
       confidence,
       followUp: (followP ?? 0) >= 0.5,
       followP,
+      tier: dif?.choice && dif.choice in levels && (dif.confidence ?? 0) >= MIN_CONFIDENCE ? (dif.choice as ModelTier) : undefined,
+      tierConfidence: dif?.confidence,
       probabilities: (cat?.probabilities ?? {}) as Partial<Record<RouteCategory, number>>
     }
     if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!)
@@ -379,7 +386,7 @@ export class Jev {
   }
 
   async test(text: string, ctx: JevContext = {}): Promise<JevTest> {
-    const c = await this.classify(text, ctx, 120_000)
-    return { ms: c.ms, category: c.category, confidence: c.confidence, probabilities: c.probabilities, followUp: c.followP }
+    const c = await this.classify(text, { ...ctx, difficulty: true }, 120_000)
+    return { ms: c.ms, category: c.category, confidence: c.confidence, probabilities: c.probabilities, followUp: c.followP, tier: c.tier, tierConfidence: c.tierConfidence }
   }
 }

@@ -7,7 +7,8 @@ import { confirmAsync } from '../../lib/app-store'
 import { usePS } from '../../lib/project-store'
 import { durationText } from '../../lib/utils'
 import { AgentLogo, Icon } from '../Icons'
-import { Elapsed } from './parts'
+import { Markdown } from '../Markdown'
+import { CopyButton, Elapsed } from './parts'
 
 export const ORCH_STATUS: Record<OrchStatus, { label: string; cls: string }> = {
   planning: { label: 'Planificando', cls: 'running' },
@@ -161,16 +162,40 @@ function TaskRow({ t, o }: { t: OrchTask; o: Orchestration }) {
   )
 }
 
+// Lo que han escrito los dos al terminar (modo Colaboración): qué se hizo, quién, cómo se revisó y el estado
+function TeamSummary({ o }: { o: Orchestration }) {
+  const m = o.messages.findLast((x) => x.kind === 'summary')
+  if (!m) return null
+  return (
+    <div className="team-summary">
+      <div className="team-summary-head">
+        <span className="team-summary-by">
+          <AgentLogo agent="claude" size={13} />
+          <AgentLogo agent="codex" size={13} />
+        </span>
+        <b>Resumen del equipo</b>
+        <span style={{ flex: 1 }} />
+        <CopyButton text={m.text} label="Copiar" title="Copiar el resumen" />
+      </div>
+      <div className="md">
+        <Markdown text={m.text} />
+      </div>
+    </div>
+  )
+}
+
 function Messages({ o }: { o: Orchestration }) {
   const [all, setAll] = useState(false)
-  const list = all ? o.messages : o.messages.slice(-6)
+  // el resumen tiene su propia tarjeta
+  const log = o.messages.filter((m) => m.kind !== 'summary')
+  const list = all ? log : log.slice(-6)
   return (
     <div className="coord">
       <div className="coord-head">
         <Icon.workflow size={12} /> Coordinación
-        {o.messages.length > 6 && (
+        {log.length > 6 && (
           <button className="link-btn" onClick={() => setAll(!all)}>
-            {all ? 'ver menos' : `ver todo (${o.messages.length})`}
+            {all ? 'ver menos' : `ver todo (${log.length})`}
           </button>
         )}
       </div>
@@ -333,6 +358,7 @@ export function TeamCard({ o }: { o: Orchestration }) {
           {testOpen && <pre className="tool-output">{o.testResult.output || '(sin salida)'}</pre>}
         </div>
       )}
+      {['awaiting_approval', 'integrated'].includes(o.status) && <TeamSummary o={o} />}
       {o.status === 'awaiting_approval' && <Approval o={o} />}
       {o.status === 'integrated' && (
         <div className="approval done">

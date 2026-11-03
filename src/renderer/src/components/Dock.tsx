@@ -58,17 +58,18 @@ export function useVisible(): Visible {
   const sidebar = useStore((s) => s.panels.sidebar)
   const terminal = useStore((s) => s.panels.bottom)
   const agents = useStore((s) => s.panels.right)
+  const activity = useStore((s) => s.panels.activity)
   const web = useStore((s) => s.web.open)
   const editor = useStore((s) => s.layout === 'code' || s.tabs.length > 0)
   const popped = useStore((s) => s.popped)
   return useMemo(() => {
-    const v: Visible = { sidebar, chat: true, editor, web, terminal, agents }
+    const v: Visible = { sidebar, chat: true, editor, web, terminal, agents, activity }
     for (const p of popped) v[p] = false
     return v
-  }, [sidebar, editor, web, terminal, agents, popped])
+  }, [sidebar, editor, web, terminal, agents, activity, popped])
 }
 
-export const POPOUT: DockPanel[] = ['chat', 'terminal', 'editor', 'agents']
+export const POPOUT: DockPanel[] = ['chat', 'terminal', 'editor', 'agents', 'activity']
 
 const rectStyle = (r: Rect): CSSProperties => ({ left: r.x, top: r.y, width: r.w, height: r.h })
 
@@ -143,7 +144,9 @@ export function Dock({ content }: { content: Record<DockPanel, ReactNode> }) {
     return () => ro.disconnect()
   }, [])
 
-  const lay = useMemo(() => layoutDock(tree, size.w, size.h, vis, code ? GROW_CODE : GROW), [tree, size, vis, code])
+  const foldedList = useStore((s) => s.folded)
+  const folded = useMemo(() => Object.fromEntries(foldedList.map((p) => [p, true])), [foldedList])
+  const lay = useMemo(() => layoutDock(tree, size.w, size.h, vis, code ? GROW_CODE : GROW, folded), [tree, size, vis, code, folded])
   const layRef = useRef(lay)
   layRef.current = lay
 
@@ -253,7 +256,8 @@ const TOGGLES: { p: DockPanel; icon: IconName; title: string }[] = [
   { p: 'sidebar', icon: 'panelLeft', title: 'Barra lateral (⌘B)' },
   { p: 'terminal', icon: 'terminal', title: 'Terminal (⌘J)' },
   { p: 'web', icon: 'globe', title: 'Web' },
-  { p: 'agents', icon: 'activity', title: 'Agentes (⌥⌘B)' }
+  { p: 'agents', icon: 'activity', title: 'Agentes (⌥⌘B)' },
+  { p: 'activity', icon: 'log', title: 'Actividad' }
 ]
 
 // Guarda la disposición actual con un nombre (si ya existe, la sustituye)
@@ -281,6 +285,7 @@ export function LayoutControls() {
       { id: 'web', label: 'Web', type: 'checkbox', checked: vis.web },
       { id: 'terminal', label: 'Terminal', type: 'checkbox', checked: vis.terminal, accelerator: SHORTCUT.terminal },
       { id: 'agents', label: 'Agentes', type: 'checkbox', checked: vis.agents, accelerator: SHORTCUT.agents },
+      { id: 'activity', label: 'Actividad', type: 'checkbox', checked: vis.activity },
       { type: 'separator' },
       {
         label: 'Abrir en una ventana nueva',

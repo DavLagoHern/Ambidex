@@ -4,13 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentEvent, AgentId, ChatItem, RouteDecision, RunInfo, RunStatus, SessionMeta, SessionTotals } from '@shared/types'
-import { UNRESTRICTED } from '@shared/types'
 import { finalizeTurn, reduceEvent, titleFromPrompt } from '@shared/chat'
 import type { Store } from '../db/store'
 import type { Adapter, Parser } from './types'
 import { killGroup, ManagedProcess, pidMatches } from './runner'
 
 export interface ServiceDeps {
+  // variables de entorno propias de cada agente (p. ej. el tope de contexto de Claude Code)
+  agentEnv?: (agent: AgentId) => Record<string, string>
   store: Store
   push: <K extends PushChannel>(channel: K, payload: PushContract[K]) => void
   adapters: Record<AgentId, Adapter>
@@ -18,7 +19,6 @@ export interface ServiceDeps {
   env: () => NodeJS.ProcessEnv
   // modelo a usar cuando la conversación no fija uno (p. ej. si config.toml de Codex apunta a uno inválido)
   defaultModel: (agent: AgentId) => string | undefined
-  allowUnrestricted: () => boolean
   extraArgs?: (agent: AgentId) => string[]
   // comprueba que una imagen adjunta es de la app y devuelve su ruta real
   checkImage?: (path: string) => string
@@ -76,6 +76,11 @@ export interface SendOptions {
   route?: RouteDecision
   allowedTools?: string[]
   images?: string[]
+  // modelo y razonamiento solo para este turno (el chat único los elige según la dificultad del mensaje)
+  model?: string
+  effort?: string
+  // lo que se ve en el chat como mensaje del usuario, si no es el prompt (p. ej. al compactar)
+  display?: string
 }
 
 const NEW_TITLE = 'Nueva conversación'
@@ -91,6 +96,11 @@ export class SessionService {
 
   runningCount() {
     return this.active.size
+  }
+
+  // algún turno de este agente en marcha (no se actualiza su CLI mientras tanto)
+  agentBusy(agent: AgentId) {
+    return [...this.active.values()].some((r) => r.agent === agent)
   }
 
   withRunState(s: SessionMeta): SessionMeta {
@@ -117,8 +127,6 @@ export class SessionService {
     if (this.active.has(sessionId)) throw new Error('El agente ya está trabajando en esta conversación')
     if (!prompt.trim()) throw new Error('El mensaje está vacío')
     if (!existsSync(session.cwd)) throw new Error(`La carpeta de trabajo ya no existe: ${session.cwd}`)
-    if (session.permission && UNRESTRICTED.includes(session.permission) && !this.d.allowUnrestricted())
-      throw new Error('Los modos sin restricciones están desactivados en Ajustes')
     const adapter = this.d.adapters[session.agent]
     const bin = this.d.resolveBin(session.agent)
     if (!bin) throw new Error(`No se encontró el CLI de ${session.agent === 'claude' ? 'Claude Code' : 'Codex'}. Revisa la ruta en Ajustes.`)
@@ -140,8 +148,8 @@ export class SessionService {
     const req = {
       cwd: session.cwd,
       resumeId: session.agentSessionId,
-      model: session.model || this.d.defaultModel(session.agent),
-      effort: session.effort,
+      model: opts.model || session.model || this.d.defaultModel(session.agent),
+      effort: opts.effort || session.effort,
       permission: session.permission,
       schema,
       extra: [...(this.d.extraArgs?.(session.agent) ?? []), ...(tools?.extra ?? [])],
@@ -175,7 +183,7 @@ export class SessionService {
     }
     this.active.set(sessionId, run)
 
-    const user: ChatItem = { id: randomUUID(), type: 'user', text: prompt, context: context || undefined, route: opts.route, images: req.images, at: now }
+    const user: ChatItem = { id: randomUUID(), type: 'user', text: opts.display ?? prompt, context: context || undefined, route: opts.route, images: req.images, at: now }
     this.track(run, [user], true)
     store.updateSession(sessionId, {
       title: session.messageCount === 0 && session.title === NEW_TITLE ? titleFromPrompt(prompt) : undefined,
@@ -190,7 +198,7 @@ export class SessionService {
     const parser = adapter.createParser()
     const start = () => {
       if (run.cancelled) return this.finish(run, { code: null, signal: null, cancelled: true })
-      this.startProcess(run, parser, { bin, args, cwd: session.cwd, stdin: adapter.stdin ? adapter.stdin(text, req) : text, env: tools?.env }, adapter)
+      this.startProcess(run, parser, { bin, args, cwd: session.cwd, stdin: adapter.stdin ? adapter.stdin(text, req) : text, env: { ...this.d.agentEnv?.(session.agent), ...tools?.env } }, adapter)
     }
     // foto de cómo están los ficheros antes de que el agente toque nada
     if (this.d.checkpoint)
@@ -235,6 +243,17 @@ export class SessionService {
       }
       this.finish(run, exit)
     })
+  }
+
+  // Compacta una conversación de Claude Code: el CLI resume lo hablado y sigue con menos contexto (menos tokens por
+  // paso a partir de ahora). Codex no lo admite así: se configura su compactación automática en Ajustes.
+  compact(sessionId: string) {
+    const s = this.d.store.getSession(sessionId)
+    if (!s) throw new Error('Conversación no encontrada')
+    if (s.agent !== 'claude') throw new Error('Codex compacta solo su conversación: ajústalo en Ajustes → Agentes')
+    if (!s.agentSessionId) throw new Error('Esta conversación aún no tiene nada que compactar')
+    if (this.active.has(sessionId)) throw new Error('Espera a que termine el turno en curso')
+    return this.send(sessionId, '/compact', undefined, { display: 'Compactar la conversación' })
   }
 
   async cancel(sessionId: string) {

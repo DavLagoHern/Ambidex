@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { setApp, toast, useApp } from '../lib/app-store'
 import { SidebarView, usePS, useStore } from '../lib/project-store'
 import { basename, untilText } from '../lib/utils'
-import { ActivityPanel } from './ActivityPanel'
+import { ActivityLogPanel, AgentsPanel } from './ActivityPanel'
 import { AgentPanel } from './AgentPanel'
 import { BottomPanel } from './BottomPanel'
 import { insertIntoComposer } from './chat/parts'
@@ -226,6 +226,7 @@ export function Workspace({ active }: { active: boolean }) {
   const ps = usePS()
   const sidebar = useStore((s) => s.panels.sidebar)
   const right = useStore((s) => s.panels.right)
+  const activityOn = useStore((s) => s.panels.activity)
   const bottom = useStore((s) => s.panels.bottom)
   const editorVisible = useStore((s) => s.layout === 'code' || s.tabs.length > 0)
   const webOpen = useStore((s) => s.web.open)
@@ -245,9 +246,10 @@ export function Workspace({ active }: { active: boolean }) {
       ) : null,
       web: webOpen ? <ProjectWeb /> : null,
       terminal: <BottomPanel visible={active && bottom && !popped.includes('terminal')} />,
-      agents: right && !popped.includes('agents') ? <ActivityPanel /> : null
+      agents: right && !popped.includes('agents') ? <AgentsPanel /> : null,
+      activity: activityOn && !popped.includes('activity') ? <ActivityLogPanel /> : null
     }),
-    [sidebar, loaded, editorVisible, webOpen, active, bottom, right, popped]
+    [sidebar, loaded, editorVisible, webOpen, active, bottom, right, activityOn, popped]
   )
 
   return (

@@ -6,8 +6,8 @@ import type { OrchMode, OrchStart, Orchestration, PlanTask } from '@shared/orche
 import { AGENT_NAMES } from '@shared/types'
 import { isWebUrl, type WebTab } from '@shared/web'
 import { api } from './api'
-import { attempt, getApp, saveSettings, setChanges, toast } from './app-store'
-import { defaultDock, DockNode, DockPanel, isDock, LayoutShow, LegacySizes } from './dock'
+import { attempt, confirmAsync, getApp, saveSettings, setChanges, toast } from './app-store'
+import { defaultDock, DockNode, DockPanel, FOLDABLE, LayoutShow, LegacySizes, upgradeDock } from './dock'
 import { basename, errMsg, relPath, toolName, uid } from './utils'
 
 // ---------- tipos ----------
@@ -42,6 +42,8 @@ export interface ActivityEntry {
 export interface Panels {
   sidebar: boolean
   right: boolean
+  // el panel «Actividad» (antes iba dentro de Agentes)
+  activity: boolean
   bottom: boolean
 }
 
@@ -58,6 +60,15 @@ export interface TerminalTab {
   cwd: string
   // servidor de desarrollo: script de package.json que se lanzó al abrirla
   dev?: string
+}
+
+export interface PendingSend {
+  id: string
+  // null: la conversación se está creando
+  threadId: string | null
+  text: string
+  images?: string[]
+  at: number
 }
 
 export interface ProjectState {
@@ -92,6 +103,8 @@ export interface ProjectState {
   threads: Record<string, ThreadMeta>
   activeThread: string | null
   queue: QueuedMessage[]
+  // mensajes ya enviados que el motor aún está enrutando: se ven al instante, antes de que decida
+  pending: PendingSend[]
   orchs: Record<string, Orchestration>
   target: Target
   teamMode: OrchMode
@@ -102,6 +115,8 @@ export interface ProjectState {
   webAgent: { agent: AgentId; action: string; at: number } | null
   // paneles que se ven en otra ventana (no se guarda: al reabrir vuelven a la principal)
   popped: DockPanel[]
+  // paneles plegados (solo se ve su cabecera)
+  folded: DockPanel[]
 }
 
 // identifica esta ventana en los cambios que se comparten con las demás ventanas del proyecto
@@ -110,18 +125,18 @@ export const WINDOW_ID = uid()
 // Lo que se guarda en SQLite para restaurar el proyecto tal cual
 const UI_KEYS = [
   'workspace', 'sidebar', 'tabs', 'activeTab', 'repo', 'active', 'agentView', 'compare', 'layout', 'panels', 'dock', 'bottomTab', 'terminals',
-  'includeContext', 'chatScroll', 'activeThread', 'target', 'teamMode', 'web'
+  'includeContext', 'chatScroll', 'activeThread', 'target', 'teamMode', 'web', 'folded'
 ] as const
 type UiState = Partial<Pick<ProjectState, (typeof UI_KEYS)[number]>>
 
-const DEFAULT_PANELS: Panels = { sidebar: true, right: true, bottom: false }
+const DEFAULT_PANELS: Panels = { sidebar: true, right: true, activity: true, bottom: false }
 
 // Un proyecto nuevo empieza con la última disposición que hayas montado en cualquier otro
 const LAST_DOCK = 'codeai.dock' // nombre de cuando la app se llamaba Code AI
 function lastDock(): DockNode | null {
   try {
     const t = JSON.parse(localStorage.getItem(LAST_DOCK) ?? 'null')
-    return isDock(t) ? t : null
+    return upgradeDock(t)
   } catch {
     return null
   }
@@ -195,13 +210,15 @@ export class ProjectStore {
       threads: {},
       activeThread: null,
       queue: [],
+      pending: [],
       orchs: {},
       target: 'auto',
       teamMode: getApp().settings?.orchMode ?? 'C',
       drawer: null,
       web: { open: false, tabs: [], active: null },
       webAgent: null,
-      popped: []
+      popped: [],
+      folded: []
     }
   }
 
@@ -282,7 +299,8 @@ export class ProjectStore {
     const map: Record<string, SessionView> = {}
     for (const s of sessions) map[s.id] = s
     const active: Partial<Record<AgentId, string>> = {}
-    for (const [a, id] of Object.entries(ui.active ?? {})) if (id && map[id]) active[a as AgentId] = id
+    // la conversación abierta de cada agente es siempre suelta: una de «Ambos» o del equipo (de versiones anteriores) no
+    for (const [a, id] of Object.entries(ui.active ?? {})) if (id && map[id] && !map[id].threadId && !map[id].orchestrationId) active[a as AgentId] = id
     const workspace = ui.workspace && (ui.workspace === this.root || ui.workspace.startsWith('/')) ? ui.workspace : this.root
     // la línea de tiempo se reconstruye a partir de las ejecuciones guardadas
     const activity = runs.flatMap((r) =>
@@ -301,9 +319,16 @@ export class ProjectStore {
       activeThread,
       activity,
       workspace,
-      panels: { sidebar: ui.panels?.sidebar ?? DEFAULT_PANELS.sidebar, right: ui.panels?.right ?? DEFAULT_PANELS.right, bottom: ui.panels?.bottom ?? DEFAULT_PANELS.bottom },
+      folded: Array.isArray(ui.folded) ? ui.folded.filter((p) => FOLDABLE.includes(p)) : [],
+      panels: {
+        sidebar: ui.panels?.sidebar ?? DEFAULT_PANELS.sidebar,
+        right: ui.panels?.right ?? DEFAULT_PANELS.right,
+        // proyectos de antes: la actividad se veía con los agentes
+        activity: ui.panels?.activity ?? ui.panels?.right ?? DEFAULT_PANELS.activity,
+        bottom: ui.panels?.bottom ?? DEFAULT_PANELS.bottom
+      },
       // los proyectos de antes conservan los tamaños que tenían sus paneles
-      dock: isDock(ui.dock) ? ui.dock : ui.panels ? defaultDock(ui.panels as LegacySizes) : (lastDock() ?? defaultDock()),
+      dock: upgradeDock(ui.dock) ?? (ui.panels ? defaultDock(ui.panels as LegacySizes) : (lastDock() ?? defaultDock())),
       // un servidor de desarrollo no se vuelve a lanzar solo al reabrir: queda la terminal
       terminals: (ui.terminals ?? []).map(({ dev, ...t }) => (dev ? { ...t, title: `${dev} (cerrado)` } : t)),
       chatScroll: ui.chatScroll ?? {},
@@ -336,7 +361,7 @@ export class ProjectStore {
 
   // ---------- layout ----------
 
-  togglePanel(k: 'sidebar' | 'right' | 'bottom', value?: boolean) {
+  togglePanel(k: 'sidebar' | 'right' | 'activity' | 'bottom', value?: boolean) {
     this.set((s) => {
       const next = value ?? !s.panels[k]
       const patch: Partial<ProjectState> = { panels: { ...s.panels, [k]: next } }
@@ -353,6 +378,7 @@ export class ProjectStore {
     const s = this.state
     if (p === 'sidebar') return s.panels.sidebar
     if (p === 'agents') return s.panels.right
+    if (p === 'activity') return s.panels.activity
     if (p === 'terminal') return s.panels.bottom
     if (p === 'web') return s.web.open
     if (p === 'editor') return s.layout === 'code' || s.tabs.length > 0
@@ -365,8 +391,13 @@ export class ProjectStore {
     const next = value ?? !this.isShown(p)
     if (p === 'sidebar') this.togglePanel('sidebar', next)
     else if (p === 'agents') this.togglePanel('right', next)
+    else if (p === 'activity') this.togglePanel('activity', next)
     else if (p === 'terminal') this.togglePanel('bottom', next)
     else if (p === 'web' && next !== this.state.web.open) this.toggleWeb()
+  }
+
+  toggleFold(p: DockPanel) {
+    this.set((s) => ({ folded: s.folded.includes(p) ? s.folded.filter((x) => x !== p) : [...s.folded, p] }))
   }
 
   setDock(dock: DockNode) {
@@ -377,13 +408,14 @@ export class ProjectStore {
   // dónde está cada panel y cuáles se ven, para guardarlo como diseño
   currentLayout(): { dock: DockNode; show: LayoutShow } {
     const s = this.state
-    return { dock: s.dock, show: { sidebar: s.panels.sidebar, terminal: s.panels.bottom, web: s.web.open, agents: s.panels.right, code: s.layout === 'code' } }
+    return { dock: s.dock, show: { sidebar: s.panels.sidebar, terminal: s.panels.bottom, web: s.web.open, agents: s.panels.right, activity: s.panels.activity, code: s.layout === 'code' } }
   }
 
   applyLayout(l: { dock: unknown; show: LayoutShow }) {
-    if (!isDock(l.dock)) return
-    this.setDock(l.dock)
-    this.set((s) => ({ panels: { sidebar: l.show.sidebar, right: l.show.agents, bottom: s.panels.bottom }, layout: l.show.code ? 'code' : 'chat' }))
+    const dock = upgradeDock(l.dock)
+    if (!dock) return
+    this.setDock(dock)
+    this.set((s) => ({ panels: { sidebar: l.show.sidebar, right: l.show.agents, activity: l.show.activity ?? l.show.agents, bottom: s.panels.bottom }, layout: l.show.code ? 'code' : 'chat' }))
     this.toggleDock('terminal', l.show.terminal)
     this.toggleDock('web', l.show.web)
   }
@@ -637,9 +669,21 @@ export class ProjectStore {
     }
   }
 
+  // Ir a una conversación desde fuera del chat (tarjetas de agentes, actividad, ejecuciones, paleta). «Ambos» es su
+  // propio tipo de conversación: una sesión que vive dentro de un hilo de Ambos abre ese hilo, y la de una tarea
+  // del equipo, su hilo con el panel de la tarea; nunca se abre como si fuera una conversación suelta del agente.
   focusSession = (id: string) => {
     const s = this.state.sessions[id]
     if (!s) return
+    if (s.threadId && this.state.threads[s.threadId]) return this.focusThread(s.threadId)
+    if (s.orchestrationId) {
+      const threadId = this.state.orchs[s.orchestrationId]?.threadId
+      if (threadId && this.state.threads[threadId]) this.focusThread(threadId)
+      else this.set({ agentView: 'auto' })
+      this.set({ drawer: id })
+      this.loadMessages(id)
+      return
+    }
     this.set((st) => ({ active: { ...st.active, [s.agent]: id }, agentView: st.agentView === 'both' ? 'both' : s.agent }))
     this.loadMessages(id)
   }
@@ -711,6 +755,17 @@ export class ProjectStore {
     )
   }
 
+  // Compactar: Claude resume lo hablado y sigue con menos contexto. En Ambos se compacta la parte de Claude; la de
+  // Codex se compacta sola según Ajustes.
+  compactSession = (sessionId: string) => attempt(() => api.sessions.compact(sessionId))
+  compactThread = async (threadId: string) => {
+    const t = this.state.threads[threadId]
+    const sid = t?.sessions.claude
+    if (!sid) return toast('En esta conversación no ha hablado Claude: Codex compacta solo su parte (Ajustes → Agentes)', 'info')
+    await this.compactSession(sid)
+    if (t.sessions.codex) toast('Compactando la parte de Claude. Codex compacta la suya solo, según Ajustes → Agentes', 'info')
+  }
+
   cancelSession = (sessionId: string) => {
     api.sessions.cancel(sessionId).catch((e) => toast(errMsg(e), 'error'))
   }
@@ -755,23 +810,67 @@ export class ProjectStore {
     for (const sid of Object.values(t.sessions)) if (sid && this.state.sessions[sid] && !this.state.sessions[sid].items) this.loadMessages(sid)
   }
 
+  // ¿Este mensaje irá a la cola? Con un agente elegido, si su conversación del hilo trabaja; en Auto, si todos los
+  // agentes disponibles están trabajando (si hay uno libre, el motor lo manda a ese)
+  private likelyQueued(threadId: string, target: Target): boolean {
+    const t = this.state.threads[threadId]
+    if (!t) return false
+    const runs = (a: AgentId) => !!(t.sessions[a] && this.state.sessions[t.sessions[a]!]?.running)
+    if (target === 'claude' || target === 'codex') return runs(target)
+    if (target !== 'auto') return false
+    const ok = (a: AgentId) => {
+      const i = getApp().agentInfo.find((x) => x.agent === a)
+      return !i || (!!i.path && i.auth?.loggedIn !== false)
+    }
+    const usable = (['claude', 'codex'] as AgentId[]).filter(ok)
+    return usable.length > 0 && usable.every(runs)
+  }
+
   // Envía desde el chat único: el motor decide el agente (o lo fija el usuario) o arranca el equipo
-  async sendUnified(text: string, target: Target, images?: string[]): Promise<RouteDecision | undefined> {
+  async sendUnified(
+    text: string,
+    target: Target,
+    images?: string[],
+    models?: Partial<Record<AgentId, string>>,
+    efforts?: Partial<Record<AgentId, string>>
+  ): Promise<RouteDecision | undefined> {
     let id = this.state.activeThread
-    if (!id || !this.state.threads[id]) id = (await this.newThread()) ?? null
-    if (!id) return undefined
-    const context = this.contextBlock() || undefined
+    if (id && !this.state.threads[id]) id = null
     if (target === 'team') {
+      id ??= (await this.newThread()) ?? null
+      if (!id) return undefined
       await this.startTeam(text, this.state.teamMode, id)
       return undefined
     }
+    // si va a quedar en cola (su destino está ocupado), no se pinta en el chat: aparece directamente en la cola
+    if (id && this.likelyQueued(id, target)) {
+      try {
+        const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context: this.contextBlock() || undefined, images, models, efforts })
+        if (r.queued) toast('El agente está ocupado: tu mensaje queda en la cola', 'info')
+        return r.decision
+      } catch (e) {
+        toast(errMsg(e), 'error')
+        return undefined
+      }
+    }
+    // el mensaje se ve ya, con su indicador; el motor decide mientras tanto
+    const p: PendingSend = { id: uid(), threadId: id, text, images: images?.length ? images : undefined, at: Date.now() }
+    const drop = () => this.set((s) => ({ pending: s.pending.filter((x) => x.id !== p.id) }))
+    this.set((s) => ({ pending: [...s.pending, p] }))
     try {
-      const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context, images })
+      id ??= (await this.newThread()) ?? null
+      if (!id) return undefined
+      const tid = id
+      this.set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, threadId: tid } : x)) }))
+      const context = this.contextBlock() || undefined
+      const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context, images, models, efforts })
       if (r.queued) toast('El agente está ocupado: tu mensaje queda en la cola', 'info')
       return r.decision
     } catch (e) {
       toast(errMsg(e), 'error')
       return undefined
+    } finally {
+      drop()
     }
   }
 
@@ -783,7 +882,21 @@ export class ProjectStore {
 
   removeQueued = (id: string) => attempt(() => api.queue.remove(id))
   updateQueued = (id: string, prompt: string) => attempt(() => api.queue.update(id, prompt))
-  sendQueuedNow = (id: string) => attempt(() => api.queue.sendNow(id))
+  // «Enviar ya»: si el agente está libre sale en el acto; si está trabajando, se pregunta antes de detenerlo
+  sendQueuedNow = async (id: string) => {
+    const q = this.state.queue.find((x) => x.id === id)
+    if (!q) return
+    const sids = q.sessionId ? [q.sessionId] : q.threadId ? Object.values(this.state.threads[q.threadId]?.sessions ?? {}) : []
+    const running = sids.filter((sid): sid is string => !!sid && !!this.state.sessions[sid]?.running)
+    // en Ambos, si uno de los dos está libre el mensaje se va a ese sin interrumpir a nadie
+    const allBusy = running.length > 0 && (q.sessionId || q.agent ? running.some((sid) => !q.agent || this.state.sessions[sid]?.agent === q.agent) : running.length >= 2)
+    if (allBusy) {
+      const who = AGENT_NAMES[this.state.sessions[running[0]]?.agent ?? 'claude']
+      if (!(await confirmAsync(`¿Detener a ${who} y enviar este mensaje ya?`, 'Se para lo que está haciendo ahora (lo hecho hasta aquí se queda) y este mensaje sale el siguiente.'))) return
+    }
+    const r = await attempt(() => api.queue.sendNow(id, allBusy))
+    if (r === 'interrupting') toast(`Deteniendo a ${AGENT_NAMES[this.state.sessions[running[0]]?.agent ?? 'claude']}: tu mensaje sale a continuación`, 'info')
+  }
 
   setQueue(items: QueuedMessage[]) {
     this.set({ queue: items })

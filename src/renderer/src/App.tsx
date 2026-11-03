@@ -63,9 +63,14 @@ export default function App() {
   }, [])
 
   const active = projectStore(activeId)
+  // el color del proyecto activo tiñe toda la ventana (línea bajo las pestañas, borde del espacio de trabajo…)
+  const project = useApp((s) => s.projects.find((p) => p.id === s.activeId))
+  useEffect(() => {
+    document.title = project ? `${project.name} — Ambidex` : 'Ambidex'
+  }, [project?.name])
 
   return (
-    <div className="app">
+    <div className="app" style={project ? { ['--proj' as string]: project.color } : undefined}>
       <TabBar />
       <div className="workspaces">
         {mounted

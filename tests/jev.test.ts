@@ -36,7 +36,10 @@ setTimeout(() => {
         if (q.type === 'noul') answers[id] = { type: 'noul', noul: /^(s[ií]|vale|y ahora)/i.test(msg) ? 0.91 : 0.07 }
         else {
           const keys = Object.keys(q.criteria)
-          const best = /error|falla|no funciona/i.test(msg) ? 'debug' : /pantalla|css|bonit/i.test(msg) ? 'frontend' : /docker|deploy|despliega/i.test(msg) ? 'terminal' : null
+          const best =
+            id === 'difficulty'
+              ? /arquitectura|refactoriza|migra/i.test(msg) ? 'hard' : 'easy'
+              : /error|falla|no funciona/i.test(msg) ? 'debug' : /pantalla|css|bonit/i.test(msg) ? 'frontend' : /docker|deploy|despliega/i.test(msg) ? 'terminal' : null
           const probabilities = {}
           for (const k of keys) probabilities[k] = best ? (k === best ? 0.72 : 0.04) : 1 / keys.length
           answers[id] = { type: 'choice', choice: best ?? keys[0], probabilities, confidence: best ? 0.68 : 0 }
@@ -136,6 +139,22 @@ describe('Jev (modelo local del enrutado)', () => {
     const again = await jev.classify('El botón de pagar da un error en el móvil', { previousAgent: 'Claude Code', previousRequest: 'Haz la pantalla de pago' })
     expect(again.ms).toBe(0)
     expect(readFileSync(join(dir, 'jevos-v5', 'requests.log'), 'utf8').trim().split('\n')).toHaveLength(1)
+
+    // con la dificultad, una sola petición más con una tercera pregunta (difícil / sencilla)
+    const hard = await jev.classify('Refactoriza la arquitectura de pagos', { difficulty: true })
+    expect(hard).toMatchObject({ tier: 'hard' })
+    const req2 = JSON.parse(readFileSync(join(dir, 'jevos-v5', 'requests.log'), 'utf8').trim().split('\n')[1])
+    expect(Object.keys(req2.questions)).toEqual(['category', 'difficulty'])
+    expect(Object.keys(req2.questions.difficulty.criteria)).toEqual(['hard', 'easy'])
+    expect(await jev.test('cambia el color del botón')).toMatchObject({ tier: 'easy' })
+
+    // tus tipos de tarea y tus criterios de dificultad (Ajustes) son lo que lee Jev
+    const mine = { debug: 'arreglar algo que falla', 'c-pagos': 'cualquier cosa de pagos, Stripe o facturación' }
+    const levels = { hard: 'pagos o datos de clientes', easy: 'textos y colores' }
+    await jev.classify('Revisa el cobro con Stripe', { categories: mine, difficulty: true, difficultyCriteria: levels })
+    const req3 = JSON.parse(readFileSync(join(dir, 'jevos-v5', 'requests.log'), 'utf8').trim().split('\n').at(-1)!)
+    expect(req3.questions.category.criteria).toEqual(mine)
+    expect(req3.questions.difficulty.criteria).toEqual(levels)
 
     // lo que entiende Jev pasa por tus preferencias: depurar → Codex
     const d = decideRoute('El botón de pagar da un error en el móvil', ctx('claude'), c)

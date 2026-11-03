@@ -60,7 +60,10 @@ if (mode === 'orch') {
     }
   }
   const state = process.env.FAKE_STATE
-  if (stdin.includes('PLANIFICADOR')) {
+  if (stdin.includes('PROPONENTE') && process.env.FAKE_FAIL_PROPOSAL === (codex ? 'codex' : 'claude')) {
+    // propuesta que no es un plan: ese agente "no pudo proponer"
+    reply('no sé por dónde empezar')
+  } else if (stdin.includes('PLANIFICADOR') || stdin.includes('PROPONENTE')) {
     reply('plan', {
       summary: 'Tres piezas: dos en paralelo y una que las une',
       testCommand: 'npm test',
@@ -70,9 +73,17 @@ if (mode === 'orch') {
         { id: 'T3', title: 'Unir', description: 'Crea T3.txt usando T1 y T2', assignee: 'claude', dependsOn: ['T1', 'T2'], acceptance: 'existe T3.txt' }
       ]
     })
+  } else if (stdin.includes('AUTOR DEL RESUMEN')) {
+    reply('Resumen: hecho entre los dos, revisado y con las pruebas superadas.')
+  } else if (stdin.includes('REVISOR FINAL') && process.env.FAKE_FINAL_CHANGES && !existsSync(join(state, 'final-once'))) {
+    writeFileSync(join(state, 'final-once'), '1')
+    reply('cambios', { verdict: 'changes', summary: 'Falta el fichero final', issues: [{ severity: 'alta', file: 'final.txt', description: 'Crea final.txt' }] })
+  } else if (stdin.includes('revisión final pide ajustes')) {
+    writeFileSync(join(process.cwd(), 'final.txt'), 'ajuste final\n')
+    reply('He creado final.txt')
   } else if (stdin.includes('REVISOR')) {
     const flag = state && join(state, 'reviewed-once')
-    if (process.env.FAKE_REVIEW_CHANGES_ONCE && flag && !existsSync(flag)) {
+    if (process.env.FAKE_REVIEW_CHANGES_ONCE && stdin.includes('REVISOR del trabajo') && flag && !existsSync(flag)) {
       writeFileSync(flag, '1')
       reply('cambios', { verdict: 'changes', summary: 'Falta algo', issues: [{ severity: 'alta', file: 'fix.txt', description: 'Crea fix.txt' }] })
     } else reply('ok', { verdict: 'approve', summary: 'Correcto', issues: [] })

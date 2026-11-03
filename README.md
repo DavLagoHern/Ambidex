@@ -16,9 +16,10 @@ Ambidex is a macOS desktop app for building software with **Claude Code** and **
   - the kind of task (decided by a small local model, [Jev](https://github.com/feder-cr/jev), or by Claude Haiku, or by rules);
   - who is busy, how much of each plan you have used, and whether the message continues the last one.
 
-  Every reply says who answered and why, and the agent that steps in gets the context of what was said with the other one.
+  The same decision also rates the task as hard or simple and picks the model you allowed for that case (by default Opus 5.5 or Sonnet 5.5 for Claude, GPT-6.1-Sol or GPT-6.1 Terra for Codex). Models you leave unticked are never used. Every reply says who answered, with which model, and why, and the agent that steps in gets the context of what was said with the other one.
 - **Team mode.** For big tasks the agents plan, split the work and each work in their own git worktree. They review each other and run your tests. Nothing reaches your branch until you approve it.
 - **Undo any agent turn.** Before and after every turn Ambidex snapshots your files as a git tree, using a temporary index. Your index, branches and history are never touched. Undo shows exactly which files would be restored or deleted, and skips the ones you changed afterwards.
+- **CLIs kept up to date.** Every 6 hours Ambidex compares each CLI with the latest version on npm and installs a new one with the tool you used to install it (Homebrew, npm or the CLI's own `update`). It never updates a CLI while that agent is working, and you can turn it off.
 - **Agents drive your browser tab.** A built-in web viewer is exposed to both agents through a local MCP server. They can:
   - open your `localhost`, read the page with numbered elements, click, type and press keys (real input events);
   - scroll, take screenshots and read console errors.
@@ -50,6 +51,8 @@ npm install            # dependencies + node-pty built for Electron
 npm run dist           # builds and packages Ambidex.app (ad-hoc signed)
 npm run install:app    # copies it to /Applications, adds a Desktop shortcut and opens it
 ```
+
+From then on it updates itself: when it opens (and every 6 hours) it runs `git pull --ff-only` in that same clone, builds the new version in the background and offers **Restart** (otherwise it installs when you quit). It never touches a clone with uncommitted changes or local commits; it tells you in **Ajustes → Agentes** instead. You can turn it off; the log is in `logs/update.log`.
 
 The app is ad-hoc signed, which is fine for a build made on your own Mac; there are no notarized downloads yet. If a CLI is not signed in, **Ajustes → Agentes y cuentas** opens its official login in a real terminal inside the app. For development, run `npm run dev`.
 
@@ -99,7 +102,7 @@ The CLI adapters are tested against output captured from Claude Code 2.1.316 and
 - **Platform and language:** macOS on Apple Silicon only, and the UI is in Spanish.
 - **Permissions:** the CLIs run non-interactively, so anything that needs permission is denied, and the chat explains how to allow it. There is no live approval prompt.
 - **Undo:** only works in git repositories.
-- **Jev:** takes about 0.7 s per decision on an M-series Mac. If it doesn't answer in time, the rules decide.
+- **Jev:** takes about 0.7 s per decision on an M-series Mac. If it doesn't answer in time, the rules decide and the hard-task model is used. How often it rates difficulty correctly has not been measured yet.
 - **CLI changes:** the output formats of the CLIs change often, and new versions may need adapter updates.
 
 ## Credits

@@ -89,7 +89,11 @@ export const claudeAdapter: Adapter = {
         switch (d.type) {
           case 'system':
             if (d.subtype === 'init') out.push({ kind: 'session', sessionId: d.session_id, model: d.model })
-            else if (d.subtype === 'compact_boundary') out.push({ kind: 'notice', text: 'Contexto compactado' })
+            else if (d.subtype === 'compact_boundary') {
+              const m = d.compact_metadata ?? {}
+              const k = (n: unknown) => (typeof n === 'number' ? (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.0', '')}k` : String(n)) : '')
+              out.push({ kind: 'notice', text: m.pre_tokens && m.post_tokens ? `Conversación compactada: ${k(m.pre_tokens)} → ${k(m.post_tokens)} tokens de contexto` : 'Conversación compactada' })
+            }
             break
           case 'rate_limit_event': {
             const info = d.rate_limit_info || {}

@@ -5,6 +5,7 @@ import { activate, activeStore, forgetProject, openProjectPath, pickAndOpenProje
 import { COMMANDS, runCommand } from '../lib/commands'
 import { api } from '../lib/api'
 import { attempt } from '../lib/app-store'
+import { imageMenu } from '../lib/image-menu'
 import { timeAgo, uid } from '../lib/utils'
 import { AgentLogo, Icon, IconName } from './Icons'
 
@@ -278,7 +279,7 @@ export function Lightbox() {
   if (!url) return null
   return (
     <div className="overlay center lightbox" onMouseDown={() => setApp({ lightbox: null })}>
-      <img src={url} alt="" />
+      <img src={url} alt="" onMouseDown={(e) => e.button === 2 && e.stopPropagation()} onContextMenu={(e) => imageMenu(e, url)} />
     </div>
   )
 }

@@ -87,4 +87,5 @@ if (current && !current.isSymbolicLink()) console.warn(`${link} ya existe y no e
 else symlinkSync(dst, link)
 if (current?.isSymbolicLink() && readlinkSync(link) !== dst) console.warn('Acceso del Escritorio actualizado')
 console.log(`Instalada en ${dst} · acceso directo en ${link}`)
-execFileSync('open', [dst])
+// al instalarse sola al salir de la app (actualización), no se vuelve a abrir
+if (!process.env.AMBIDEX_NO_OPEN) execFileSync('open', [dst])

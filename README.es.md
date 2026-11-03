@@ -18,6 +18,8 @@ npm run dist           # compila y empaqueta "Ambidex.app" (firma ad hoc)
 npm run install:app    # la copia a /Applications, crea un acceso en el Escritorio y la abre
 ```
 
+A partir de ahí se actualiza sola: al abrirla (y cada 6 horas) trae lo último de GitHub con `git pull --ff-only` en esa misma carpeta, lo compila en segundo plano y te ofrece **Reiniciar** (si no, se instala al cerrar la app). No toca nada si el clon tiene cambios sin commitear o commits propios: te avisa en **Ajustes → Agentes**. Se puede desactivar; el registro queda en `logs/update.log`.
+
 Requisitos:
 - macOS en Apple Silicon (probado en macOS 27)
 - Node 22.15 o superior (recomendado 24)
@@ -42,7 +44,11 @@ Cada proyecto es una **pestaña** arriba, como en un navegador. Para abrir uno: 
 | **Equipo** (destino del chat Ambos) | Para tareas grandes. Ver más abajo. |
 | **Web** (botón de la misma barra) | Un navegador junto al chat. Ver más abajo. |
 
-Siempre a mano: **modelo**, **razonamiento** y **permisos** del agente que va a responder.
+Siempre a mano: **modelo**, **razonamiento** y **permisos**. En «Auto» se ven los del último agente que respondió (no cambian mientras escribes): el motor decide al enviar.
+
+**Razonamiento automático:** por defecto **medio**. Jev solo lo sube a **alto** si ve clara una tarea difícil (confianza ≥ 60 %) y lo baja a **bajo** con una claramente sencilla. Los niveles por encima de alto (muy alto, máximo) gastan mucho límite: solo se usan si los eliges tú en la conversación. Se desactiva en Ajustes → Modelos.
+
+**Sin límites** (Claude) y **Acceso total** (Codex) están siempre en el selector de permisos y se marcan en amarillo cuando están elegidos.
 
 **Cola:** si el agente está ocupado, lo que escribas se encola. Puedes editarlo, quitarlo o enviarlo ya; sale solo cuando el agente queda libre y sobrevive a reinicios.
 
@@ -83,6 +89,23 @@ En el chat **Ambos**, cada mensaje va a Claude o a Codex según el tipo de tarea
 - **Claude Haiku:** entiende bien, pero tarda unos segundos y gasta algo de cuota.
 - **Reglas:** palabras clave. Son instantáneas, pero no entienden la intención.
 
+### Modelo según la dificultad
+
+En la misma consulta en que elige el agente, Jev (o Claude Haiku) clasifica el mensaje como tarea **difícil** o **sencilla**. En **Ajustes → Modelos** marcas qué modelos puede usar cada agente y cuál es para cada caso; los que no marques no se usan nunca. De serie:
+
+| | Difíciles | Sencillas |
+|---|---|---|
+| Claude Code | Claude Opus 5.5 | Claude Sonnet 5.5 |
+| Codex | GPT-6.1-Sol | GPT-6.1 Terra |
+
+- Si duda, no contesta a tiempo o el motor son las reglas, se usa el de las difíciles.
+- Si fijas un modelo en el selector de la conversación (también antes del primer mensaje), manda el tuyo. «Auto» vuelve a elegirlo en cada mensaje.
+- Un modelo marcado que tu versión del CLI no ofrece no se elige, y Ajustes te avisa.
+
+### Actualización de los CLI
+
+Cada 6 horas (y con **Ajustes → Agentes → Buscar ahora**) la app compara la versión de cada CLI con la última publicada en npm. Si hay una nueva, la instala con lo mismo con que lo instalaste: Homebrew (`brew upgrade --cask codex`), npm o el propio `claude update` / `codex update`. Nunca mientras ese agente está trabajando: espera a que termine. Después vuelve a detectar el CLI, porque una versión nueva puede traer otros modelos (el catálogo de Codex depende de la versión). Se puede desactivar.
+
 ### Equipo (orquestador multiagente)
 
 1. **Plan:** un agente inspecciona el proyecto y devuelve un plan estructurado (JSON validado con esquema), con tareas, dependencias, asignaciones, criterios de aceptación y comando de pruebas. Puedes cambiar el reparto o quitar tareas antes de aprobarlo.
@@ -94,7 +117,14 @@ En el chat **Ambos**, cada mensaje va a Claude o a Codex según el tipo de tarea
 7. **Tu aprobación:** ves los ficheros cambiados, con autoría y diff. Al integrar, todo queda preparado en tu rama para que hagas commit y push. Nada toca tu rama antes.
 
 Modos del equipo:
-- **Colaboración automática:** reparto según dependencias.
+- **Colaboración automática:** los dos trabajan como un equipo, en cinco fases:
+  1. **Propuestas:** cada agente propone un plan por su cuenta y a la vez, sin ver el del otro.
+  2. **Acuerdo:** el planificador junta las dos en un plan, y el otro agente da su conformidad o pide ajustes, que se incorporan.
+  3. **Reparto y ejecución:** cada uno trabaja sus tareas en su propia rama, y las que dependen de otras reciben el trabajo del otro.
+  4. **Revisión cruzada** de cada tarea, e integración y pruebas.
+  5. **Revisión conjunta del resultado completo:** los dos lo revisan; si piden ajustes se aplican y se repiten las pruebas. Al final, un **resumen** escrito en nombre de los dos.
+
+  Si un agente no puede proponer, sigue con el otro. Nada llega a tu rama sin tu aprobación.
 - **Claude lidera:** Claude planifica y revisa, Codex implementa.
 - **Codex lidera:** al revés.
 - **Revisión cruzada:** uno implementa y el otro revisa.
@@ -128,7 +158,7 @@ El motor es local, explícito y persistente (SQLite). Si cierras la app a mitad,
 
 ```bash
 npm run typecheck     # TypeScript estricto
-npm test              # 121 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
+npm test              # 139 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
 npm run build && npm run test:e2e          # E2E de la app real (Playwright) con los CLI reales
 npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales sobre un repositorio temporal
 ```
@@ -154,7 +184,7 @@ npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales s
 - **Extensiones:** solo se leen. Los ficheros de configuración (que pueden tener claves) no se abren en la app: solo los `.md`.
 - **Git:** `git:run` admite una lista cerrada de subcomandos y bloquea `-c`, `--upload-pack`, `--exec` y `rebase -x`. Git nunca abre un editor.
 - **Pruebas del equipo:** solo se ejecutan comandos de pruebas conocidos y sin metacaracteres.
-- **Permisos:** los modos sin restricciones están ocultos salvo que los actives. Nada se integra en tu rama ni se publica sin una acción tuya, y las acciones destructivas piden confirmación nativa.
+- **Permisos:** los modos sin restricciones se eligen en el selector de cada conversación y se marcan en amarillo. Nada se integra en tu rama ni se publica sin una acción tuya, y las acciones destructivas piden confirmación nativa.
 - **App empaquetada:** los *fuses* de Electron `RunAsNode` y `NODE_OPTIONS` están desactivados, así que la app no se puede usar como un intérprete de Node encubierto y arranca bien aunque la lances desde una terminal de VS Code.
 - **Auditoría:** registro en SQLite de operaciones Git, escrituras, ejecuciones, logins e integraciones.
 
@@ -175,7 +205,7 @@ npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales s
 
 ## Limitaciones conocidas
 
-- **Jev con el modelo real:** instalado desde la app y verificado con SHA-256. Una prueba en español acertó (depurar, 80 %) en 711 ms, más lento que las decenas de milisegundos que anuncian sus autores pero dentro del margen del enrutado (1,2 s mientras escribes, 3 s al enviar). Su acierto con más mensajes aún no está medido.
+- **Jev con el modelo real:** instalado desde la app y verificado con SHA-256. Una prueba en español acertó (depurar, 80 %) en 711 ms, más lento que las decenas de milisegundos que anuncian sus autores pero dentro del margen del enrutado (1,2 s mientras escribes, 3 s al enviar). Su acierto con más mensajes aún no está medido, tampoco el de la dificultad, que se pregunta en la misma petición (no se ha medido cuánto tiempo añade).
 - **Visor web:** Google y otras webs pueden pedir un captcha o bloquear el inicio de sesión dentro de apps embebidas. Para eso, ⌘-clic abre el enlace en tu navegador.
 
 - **Aprobación de permisos en vivo:** los CLI se ejecutan en modo no interactivo. Lo que requiere permiso se deniega y se muestra en el chat con la forma de permitirlo (cambiar el modo de permisos). La aprobación interactiva necesitaría el protocolo de control de Claude y `codex app-server`, que Codex documenta como experimental.

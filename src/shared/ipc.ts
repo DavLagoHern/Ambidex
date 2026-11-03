@@ -1,5 +1,5 @@
 import type {
-  AgentId, AgentInfo, AgentLimits, AppInfo, ChatItem, JevStatus, JevTest, CommitDetail, DevScript, DirEntry, Extensions, ExternalSession, FileContent, GitBranch, GitCommit, GitLogEntry,
+  AgentId, AgentInfo, AgentLimits, AppInfo, AppUpdate, ChatItem, CliUpdate, JevStatus, JevTest, CommitDetail, DevScript, DirEntry, Extensions, ExternalSession, FileContent, GitBranch, GitCommit, GitLogEntry,
   GitStatus, GitWorktree, GrepHit, NativeMenuItem, ProjectMeta, ProjectPatch, QueuedMessage, RouteDecision, RunInfo, RunLogLine,
   SearchHit, SessionCreate, SessionMeta, SessionPatch, Settings, ThreadMeta, UndoFile, WebIssue
 } from './types'
@@ -54,12 +54,22 @@ export interface IpcContract {
   'runs:undoPreview': (runId: string) => { files: UndoFile[]; overlapping: number }
   'runs:undo': (runId: string) => { restored: string[]; deleted: string[]; skipped: string[] }
   'sessions:cancel': (id: string) => void
+  // Claude Code: resume la conversación para seguir con menos contexto
+  'sessions:compact': (id: string) => void
   'runs:recent': (projectId: string, limit: number) => RunInfo[]
   'runs:log': (runId: string) => RunLogLine[]
 
   'agents:info': (refresh: boolean) => AgentInfo[]
   'agents:limits': () => Partial<Record<AgentId, AgentLimits>>
   'agents:oneShot': (agent: AgentId, cwd: string, prompt: string, stdin: string, model?: string) => string
+  // versiones nuevas de los CLI: estado, comprobar ahora (instala si está activado) e instalar ya la de un agente
+  'cli:updates': () => CliUpdate[]
+  'cli:check': () => CliUpdate[]
+  'cli:update': (agent: AgentId) => CliUpdate
+  // versión nueva de Ambidex: estado, comprobar ahora y reiniciar para instalar la ya compilada
+  'self:status': () => AppUpdate
+  'self:check': () => AppUpdate
+  'self:restart': () => void
 
   'fs:list': (dir: string) => DirEntry[]
   'fs:read': (path: string) => FileContent
@@ -114,7 +124,14 @@ export interface IpcContract {
   'jev:stop': () => void
   'jev:remove': () => Settings
   'jev:test': (text: string) => JevTest
-  'threads:send': (threadId: string, text: string, opts: { agent?: AgentId; context?: string; images?: string[] }) => { decision?: RouteDecision; sessionId?: string; queued?: boolean }
+  // arrancar Jev en segundo plano (al abrir la app o al empezar a escribir) para que llegue a tiempo al enviar
+  'jev:warm': () => void
+  // models/efforts: modelo y razonamiento fijados por agente antes de que exista su conversación en el hilo
+  'threads:send': (
+    threadId: string,
+    text: string,
+    opts: { agent?: AgentId; context?: string; images?: string[]; models?: Partial<Record<AgentId, string>>; efforts?: Partial<Record<AgentId, string>> }
+  ) => { decision?: RouteDecision; sessionId?: string; queued?: boolean }
 
   'queue:list': (projectId: string) => QueuedMessage[]
   'queue:add': (m: { projectId: string; sessionId?: string; threadId?: string; prompt: string; context?: string; images?: string[] }) => QueuedMessage
@@ -123,7 +140,8 @@ export interface IpcContract {
   'attachments:read': (path: string) => string
   'queue:remove': (id: string) => void
   'queue:update': (id: string, prompt: string) => void
-  'queue:sendNow': (id: string) => void
+  // con el destino ocupado, `interrupt` detiene el turno en curso y este mensaje sale el siguiente
+  'queue:sendNow': (id: string, interrupt?: boolean) => 'sent' | 'interrupting'
 
   'orch:list': (projectId: string) => Orchestration[]
   'orch:get': (id: string) => Orchestration | undefined
@@ -190,6 +208,8 @@ export interface PushContract {
   // cambios de estado que se reflejan en todas las ventanas de un proyecto (las terminales)
   'panel:sync': { projectId: string; origin: string; patch: Record<string, unknown> }
   'jev:status': JevStatus
+  'cli:update': CliUpdate
+  'self:update': AppUpdate
 }
 
 export type PushChannel = keyof PushContract

@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyDrop, defaultDock, DOCK_PANELS, DockNode, DockPanel, dropLabel, findDrop, GAP, isDock, isLeaf, layoutDock, Rect, removePanel, resizeSplit, Visible
+  applyDrop, defaultDock, DOCK_PANELS, DockNode, DockPanel, dropLabel, findDrop, GAP, isDock, isLeaf, layoutDock, Rect, removePanel, resizeSplit, upgradeDock, Visible, FOLD_H
 } from '../src/renderer/src/lib/dock'
 
-const ALL: Visible = { sidebar: true, chat: true, editor: true, web: true, terminal: true, agents: true }
-const BASIC: Visible = { sidebar: true, chat: true, editor: false, web: false, terminal: false, agents: true }
+const ALL: Visible = { sidebar: true, chat: true, editor: true, web: true, terminal: true, agents: true, activity: true }
+const BASIC: Visible = { sidebar: true, chat: true, editor: false, web: false, terminal: false, agents: true, activity: false }
 const MIN: Record<DockPanel, [number, number]> = {
   sidebar: [180, 120],
   chat: [320, 200],
   editor: [280, 120],
   web: [280, 120],
   terminal: [220, 80],
-  agents: [220, 140]
+  agents: [220, 140],
+  activity: [220, 120]
 }
 
 const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
@@ -126,7 +127,73 @@ describe('Disposición de paneles', () => {
     const t = removePanel(defaultDock(), 'terminal')
     expect(isLeaf(t)).toBe(false)
     // la columna (chat · editor · web) / terminal se convierte en parte de la fila principal
-    expect((t as { children: DockNode[] }).children.map((c) => (isLeaf(c) ? c.panel : 'split'))).toEqual(['sidebar', 'chat', 'editor', 'web', 'agents'])
+    expect((t as { children: DockNode[] }).children.map((c) => (isLeaf(c) ? c.panel : 'split'))).toEqual(['sidebar', 'chat', 'editor', 'web', 'split'])
+  })
+
+  it('Actividad es un panel propio, debajo de Agentes, y se puede ocultar o mover sin tocar al otro', () => {
+    const t = defaultDock()
+    const lay = layoutDock(t, 1500, 900, ALL)
+    const a = lay.rects.agents!
+    const act = lay.rects.activity!
+    expect(act.x).toBe(a.x)
+    expect(act.y).toBeGreaterThan(a.y)
+    // oculta, Agentes ocupa toda la columna
+    const only = layoutDock(t, 1500, 900, { ...ALL, activity: false })
+    expect(only.rects.activity).toBeUndefined()
+    expect(only.rects.agents!.h).toBeGreaterThan(a.h)
+    // arrastrada abajo del todo, queda a todo lo ancho
+    const bottom = findDrop(lay, 700, 895, 'activity')!
+    const r = layoutDock(applyDrop(t, lay, 'activity', bottom.drop), 1500, 900, ALL).rects
+    expect(r.activity!.w).toBe(1500)
+    expect(r.activity!.y + r.activity!.h).toBe(900)
+    expect(r.agents!.w).toBeLessThan(1500)
+  })
+
+  it('plegar Agentes o Actividad deja solo la cabecera y el otro se lleva el sitio', () => {
+    const t = defaultDock()
+    const open = layoutDock(t, 1500, 900, ALL)
+    const fa = layoutDock(t, 1500, 900, ALL, undefined, { activity: true })
+    expect(fa.rects.activity!.h).toBe(FOLD_H)
+    expect(fa.rects.activity!.y + FOLD_H).toBe(900)
+    expect(fa.rects.agents!.h).toBe(900 - FOLD_H - GAP)
+    // entre los dos no queda separador que arrastrar
+    expect(fa.splitters.length).toBe(open.splitters.length - 1)
+    const fg = layoutDock(t, 1500, 900, ALL, undefined, { agents: true })
+    expect(fg.rects.agents!.h).toBe(FOLD_H)
+    expect(fg.rects.activity!.h).toBe(900 - FOLD_H - GAP)
+    // los dos plegados: el ancho de la columna no cambia
+    const both = layoutDock(t, 1500, 900, ALL, undefined, { agents: true, activity: true })
+    expect(both.rects.agents!.h).toBe(FOLD_H)
+    expect(both.rects.agents!.w).toBe(open.rects.agents!.w)
+  })
+
+  it('una disposición guardada sin Actividad se conserva y la recibe debajo de Agentes', () => {
+    // la de antes: Agentes a la derecha del todo, sin panel de actividad
+    const old = {
+      dir: 'row',
+      size: 0,
+      children: [
+        { panel: 'sidebar', size: 250 },
+        { panel: 'chat', size: 700 },
+        { panel: 'editor', size: 400 },
+        { panel: 'web', size: 300 },
+        { panel: 'terminal', size: 200 },
+        { panel: 'agents', size: 340 }
+      ]
+    }
+    expect(isDock(old)).toBe(false)
+    const up = upgradeDock(old)!
+    expect(isDock(up)).toBe(true)
+    const kids = (up as { children: DockNode[] }).children
+    expect(kids.slice(0, 5).map((c) => (isLeaf(c) ? c.panel : 'split'))).toEqual(['sidebar', 'chat', 'editor', 'web', 'terminal'])
+    expect(kids[0]).toMatchObject({ size: 250 })
+    const right = kids[5] as { dir: string; children: DockNode[] }
+    expect(right.dir).toBe('col')
+    expect(right.children.map((c) => (isLeaf(c) ? c.panel : '?'))).toEqual(['agents', 'activity'])
+    // lo roto sigue rechazado, y uno ya al día no cambia
+    expect(upgradeDock({ panel: 'chat', size: 1 })).toBeNull()
+    const cur = defaultDock()
+    expect(upgradeDock(cur)).toBe(cur)
   })
 
   it('después de cientos de movimientos al azar, ningún panel se pierde, se solapa ni baja de su mínimo', () => {

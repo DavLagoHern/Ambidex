@@ -60,6 +60,7 @@ export const api = {
     search: bind('sessions:search'),
     send: bind('sessions:send'),
     cancel: bind('sessions:cancel'),
+    compact: bind('sessions:compact'),
     undoPreview: bind('runs:undoPreview'),
     undo: bind('runs:undo')
   },
@@ -71,7 +72,18 @@ export const api = {
     cancel: bind('jev:cancel'),
     stop: bind('jev:stop'),
     remove: bind('jev:remove'),
-    test: bind('jev:test')
+    test: bind('jev:test'),
+    warm: bind('jev:warm')
+  },
+  cli: {
+    updates: bind('cli:updates'),
+    check: bind('cli:check'),
+    update: bind('cli:update')
+  },
+  self: {
+    status: bind('self:status'),
+    check: bind('self:check'),
+    restart: bind('self:restart')
   },
   threads: {
     list: bind('threads:list'),

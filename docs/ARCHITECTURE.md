@@ -34,7 +34,8 @@ Hallazgos que condicionan el diseño:
   responde `model_not_found`. Además, `~/.codex/models_cache.json` lo comparten otros clientes de Codex (la app
   de escritorio lo reescribió como cliente 0.163.0 y pasó a listar `gpt-6.1-sol`). Por eso la app pide el catálogo
   al propio CLI con `codex debug models`, deja la caché solo como respaldo y elige un modelo válido cuando
-  `config.toml` apunta a uno que no está disponible.
+  `config.toml` apunta a uno que no está disponible. (Codex 0.166.0, instalado el 2026-11-02, ya ofrece
+  `gpt-6.1-sol` y `gpt-6.1-terra`.)
 - En modo `-p`, Claude se lanza con `--permission-prompts none`: sin un host que responda, lo que requeriría
   permiso se deniega de forma determinista y aparece en `permission_denials`, que la UI muestra.
 - Ambos CLI aceptan el prompt por stdin (`claude -p` sin argumento; `codex exec -`, también al reanudar), lo que
@@ -203,11 +204,23 @@ aleatoria (`JEV_API_KEY`). Cada mensaje es **una** petición a `/v1/systemone` c
 anterior y la petición anterior como estado, y dos preguntas: `choice` entre los 8 tipos de tarea y `noul`
 "¿continúa la petición anterior?". El tipo (si la confianza ≥ 0,2) pasa por las preferencias del usuario y
 las mismas restricciones que las reglas. Si Jev no contesta en 1,2 s (vista previa) o 3 s (envío), deciden
-las reglas. Las respuestas se cachean (la vista previa y el envío hacen la misma pregunta). El servidor se
+las reglas. Con **modelo según la dificultad** activo (Ajustes → Modelos, `settings.modelPolicy`), la misma
+petición lleva una tercera pregunta, `choice` entre `hard` y `easy`; también se pregunta si el agente lo eligió
+el usuario o con `@mención`. `pickModel` (en `router.ts`) elige entre los modelos permitidos de ese agente el de
+esa dificultad, sin elegir nunca uno que el CLI instalado no ofrezca; sin estimación, el de `hard`. El modelo va
+solo en ese turno (`SendOptions.model`): las sesiones del hilo no fijan modelo salvo que el usuario elija uno en el
+selector (o antes del primer mensaje, en `threads:send` `models`). El razonamiento sigue la misma idea (`pickEffort`, `modelPolicy.autoEffort`): medio por defecto, alto o bajo solo si la confianza de la dificultad es ≥ 0,6, nunca por encima de alto salvo que lo fije el usuario (`SendOptions.effort`, `threads:send` `efforts`). Las respuestas se cachean (la vista previa y el envío hacen la misma pregunta). El servidor se
 detiene tras 10 minutos sin uso (≈1 GB de memoria) y al salir de la app; si quedó huérfano tras un cierre
 inesperado, se detiene al volver a abrir. `Dispatcher` (proceso principal) crea
 una sesión por agente dentro de cada hilo y, al cambiar de agente, le pasa lo hablado con el otro. La cola
 de mensajes vive en SQLite y se procesa cuando la conversación queda libre.
+
+**Actualización de los CLI** (`src/main/agents/updates.ts`): un minuto después de abrir y cada 6 horas, compara
+`--version` con los dist-tags de npm (`@anthropic-ai/claude-code` en el canal de `~/.claude/settings.json`,
+`@openai/codex`) y, si hay una nueva, la instala según cómo se instaló el binario (ruta real en `Caskroom`/`Cellar`
+→ `brew upgrade`, en `lib/node_modules` → `npm install -g`, si no → `<cli> update`; el binario de la extensión de
+VS Code no se toca). Nunca con un turno de ese agente en marcha: lo reintenta a los 2 minutos. Después vuelve a
+detectar el CLI (versión y catálogo de modelos). No corre con `AMBIDEX_USER_DATA` (E2E).
 
 ## 6b. Visor web
 
@@ -241,7 +254,8 @@ sin commit. Al reiniciar la app lo que estaba en marcha pasa a `interrupted` y s
 - IPC con contrato tipado; las rutas de ficheros/Git se validan contra las raíces de proyectos abiertos y el
   directorio de worktrees de la app.
 - `git` se ejecuta con `execFile` y una lista de subcomandos permitidos; nunca opciones `-c`/`--upload-pack`/`--exec`.
-- Los modos sin restricciones (`bypassPermissions`, `danger-full-access`) están ocultos salvo que se activen en Ajustes.
+- Los modos sin restricciones (`bypassPermissions`, `danger-full-access`) se eligen por conversación en el selector de permisos y se marcan en amarillo.
+- Actualización de la app (`src/main/app-update.ts`): el build graba la carpeta del clon y el commit (`__AMBIDEX_SOURCE__`, `__AMBIDEX_COMMIT__`); solo `git fetch` + `pull --ff-only` con el clon limpio y sin commits propios; `npm ci` solo si cambian `package.json`/`package-lock.json`; el instalador corre suelto al salir de la app.
 - No se guardan credenciales: la autenticación la gestionan los CLI.
 - Registro de auditoría de operaciones de Git, escrituras de ficheros, ejecuciones y cancelaciones.
 

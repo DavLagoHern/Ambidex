@@ -6,7 +6,7 @@
 
 import type { LayoutShow } from '@shared/types'
 
-export type DockPanel = 'sidebar' | 'chat' | 'editor' | 'web' | 'terminal' | 'agents'
+export type DockPanel = 'sidebar' | 'chat' | 'editor' | 'web' | 'terminal' | 'agents' | 'activity'
 export type Side = 'left' | 'right' | 'top' | 'bottom'
 export type DockDir = 'row' | 'col'
 export interface DockLeaf {
@@ -28,18 +28,19 @@ export interface Rect {
   h: number
 }
 
-export const DOCK_PANELS: DockPanel[] = ['sidebar', 'chat', 'editor', 'web', 'terminal', 'agents']
+export const DOCK_PANELS: DockPanel[] = ['sidebar', 'chat', 'editor', 'web', 'terminal', 'agents', 'activity']
 export const DOCK_NAMES: Record<DockPanel, string> = {
   sidebar: 'Barra lateral',
   chat: 'Chat',
   editor: 'Editor',
   web: 'Web',
   terminal: 'Terminal',
-  agents: 'Agentes'
+  agents: 'Agentes',
+  activity: 'Actividad'
 }
 // quién se queda con el espacio libre de cada división
-export const GROW: DockPanel[] = ['chat', 'editor', 'web', 'terminal', 'agents', 'sidebar']
-export const GROW_CODE: DockPanel[] = ['editor', 'chat', 'web', 'terminal', 'agents', 'sidebar']
+export const GROW: DockPanel[] = ['chat', 'editor', 'web', 'terminal', 'agents', 'activity', 'sidebar']
+export const GROW_CODE: DockPanel[] = ['editor', 'chat', 'web', 'terminal', 'agents', 'activity', 'sidebar']
 
 export const GAP = 1 // la línea del separador
 const EDGE = 14 // franja de los bordes del área que coloca el panel a todo lo ancho o alto
@@ -49,7 +50,8 @@ const MIN: Record<DockPanel, [number, number]> = {
   editor: [280, 120],
   web: [280, 120],
   terminal: [220, 80],
-  agents: [220, 140]
+  agents: [220, 140],
+  activity: [220, 120]
 }
 // tamaño con el que llega un panel a un sitio nuevo
 const PREF: Record<DockPanel, [number, number]> = {
@@ -58,7 +60,8 @@ const PREF: Record<DockPanel, [number, number]> = {
   editor: [560, 360],
   web: [560, 420],
   terminal: [520, 260],
-  agents: [300, 320]
+  agents: [300, 320],
+  activity: [300, 260]
 }
 
 export const isLeaf = (n: DockNode): n is DockLeaf => 'panel' in n
@@ -74,7 +77,13 @@ export interface LegacySizes {
   webW?: number
 }
 
-// La disposición de siempre: barra lateral | (chat · editor · web) sobre la terminal | agentes
+const leaf = (panel: DockPanel, size: number): DockLeaf => ({ panel, size })
+const split = (dir: DockDir, size: number, children: DockNode[]): DockSplit => ({ dir, size, children })
+
+// La columna de la derecha: Agentes arriba y Actividad debajo (cada uno se puede arrastrar a otro sitio)
+const rightColumn = (w: number): DockSplit => split('col', w, [leaf('agents', 300), leaf('activity', 360)])
+
+// La disposición de siempre: barra lateral | (chat · editor · web) sobre la terminal | agentes sobre actividad
 export function defaultDock(old: LegacySizes = {}): DockNode {
   const n = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : d)
   return {
@@ -98,53 +107,66 @@ export function defaultDock(old: LegacySizes = {}): DockNode {
           { panel: 'terminal', size: n(old.bottomH, 260) }
         ]
       },
-      { panel: 'agents', size: n(old.rightW, 300) }
+      rightColumn(n(old.rightW, 300))
     ]
   }
 }
 
-const leaf = (panel: DockPanel, size: number): DockLeaf => ({ panel, size })
-const split = (dir: DockDir, size: number, children: DockNode[]): DockSplit => ({ dir, size, children })
 
 // Diseños de serie: qué se ve y dónde. La disposición «código» deja el editor a la vista y le da el espacio.
 export const PRESETS: { name: string; dock: DockNode; show: LayoutShow }[] = [
-  { name: 'Normal', dock: defaultDock(), show: { sidebar: true, terminal: false, web: false, agents: true, code: false } },
+  { name: 'Normal', dock: defaultDock(), show: { sidebar: true, terminal: false, web: false, agents: true, activity: true, code: false } },
   {
     name: 'Frontend',
     dock: split('row', 0, [
       leaf('sidebar', 240),
       split('col', 900, [split('row', 600, [leaf('chat', 480), leaf('editor', 520), leaf('web', 860)]), leaf('terminal', 220)]),
-      leaf('agents', 280)
+      rightColumn(280)
     ]),
-    show: { sidebar: false, terminal: true, web: true, agents: false, code: false }
+    show: { sidebar: false, terminal: true, web: true, agents: false, activity: false, code: false }
   },
   {
     name: 'Código',
     dock: split('row', 0, [
       leaf('sidebar', 272),
       split('col', 900, [split('row', 600, [leaf('editor', 800), leaf('chat', 460), leaf('web', 520)]), leaf('terminal', 240)]),
-      leaf('agents', 280)
+      rightColumn(280)
     ]),
-    show: { sidebar: true, terminal: true, web: false, agents: false, code: true }
+    show: { sidebar: true, terminal: true, web: false, agents: false, activity: false, code: true }
   },
-  { name: 'Concentrado', dock: defaultDock(), show: { sidebar: false, terminal: false, web: false, agents: false, code: false } }
+  { name: 'Concentrado', dock: defaultDock(), show: { sidebar: false, terminal: false, web: false, agents: false, activity: false, code: false } }
 ]
 
 // Comprueba un árbol guardado: estructura correcta y cada panel exactamente una vez
-export function isDock(x: unknown): x is DockNode {
+function validDock(x: unknown, panels: DockPanel[]): boolean {
   const seen = new Set<string>()
   const ok = (n: unknown, depth: number): boolean => {
     if (!n || typeof n !== 'object' || depth > 12) return false
     const o = n as Record<string, unknown>
     if (typeof o.size !== 'number' || !Number.isFinite(o.size) || o.size < 0) return false
     if ('panel' in o) {
-      if (!DOCK_PANELS.includes(o.panel as DockPanel) || seen.has(o.panel as string)) return false
+      if (!panels.includes(o.panel as DockPanel) || seen.has(o.panel as string)) return false
       seen.add(o.panel as string)
       return true
     }
     return (o.dir === 'row' || o.dir === 'col') && Array.isArray(o.children) && o.children.length > 0 && o.children.every((c) => ok(c, depth + 1))
   }
-  return ok(x, 0) && seen.size === DOCK_PANELS.length
+  return ok(x, 0) && seen.size === panels.length
+}
+
+export const isDock = (x: unknown): x is DockNode => validDock(x, DOCK_PANELS)
+
+// Disposición guardada antes de que existiera el panel «Actividad» (venía dentro de Agentes): se conserva todo y la
+// Actividad entra justo debajo de los Agentes, en la misma columna.
+export function upgradeDock(x: unknown): DockNode | null {
+  if (isDock(x)) return x
+  if (!validDock(x, DOCK_PANELS.filter((p) => p !== 'activity'))) return null
+  const put = (n: DockNode): DockNode => {
+    if (isLeaf(n)) return n.panel === 'agents' ? split('col', n.size, [{ ...n, size: Math.min(n.size, 300) }, leaf('activity', 360)]) : n
+    return { ...n, children: n.children.map(put) }
+  }
+  const out = put(x as DockNode)
+  return isDock(out) ? out : null
 }
 
 export function contains(n: DockNode, p: DockPanel): boolean {
@@ -155,9 +177,15 @@ function shown(n: DockNode, vis: Visible): boolean {
   return isLeaf(n) ? vis[n.panel] : n.children.some((c) => shown(c, vis))
 }
 
-function minOf(n: DockNode, axis: number, vis: Visible): number {
-  if (isLeaf(n)) return MIN[n.panel][axis]
-  const kids = n.children.filter((c) => shown(c, vis)).map((c) => minOf(c, axis, vis))
+// Paneles plegados: solo su cabecera. En una columna ocupan eso y el resto se lo llevan los de al lado; en una fila
+// conservan su ancho (se pliega el contenido, no el sitio).
+export type Folded = Partial<Record<DockPanel, boolean>>
+export const FOLD_H = 38 // alto de la cabecera de un panel
+export const FOLDABLE: DockPanel[] = ['agents', 'activity']
+
+function minOf(n: DockNode, axis: number, vis: Visible, folded: Folded = {}): number {
+  if (isLeaf(n)) return axis === 1 && folded[n.panel] ? FOLD_H : MIN[n.panel][axis]
+  const kids = n.children.filter((c) => shown(c, vis)).map((c) => minOf(c, axis, vis, folded))
   if (!kids.length) return 0
   return axisOf(n.dir) === axis ? kids.reduce((a, b) => a + b, 0) + GAP * (kids.length - 1) : Math.max(...kids)
 }
@@ -204,7 +232,7 @@ export function allocate(sizes: number[], mins: number[], flex: number, len: num
   return s
 }
 
-export function layoutDock(tree: DockNode, w: number, h: number, vis: Visible, grow: DockPanel[] = GROW): DockLayout {
+export function layoutDock(tree: DockNode, w: number, h: number, vis: Visible, grow: DockPanel[] = GROW, folded: Folded = {}): DockLayout {
   const out: DockLayout = { w, h, rects: {}, splitters: [] }
   const walk = (n: DockNode, r: Rect, path: number[]) => {
     if (isLeaf(n)) {
@@ -216,18 +244,27 @@ export function layoutDock(tree: DockNode, w: number, h: number, vis: Visible, g
     if (idx.length === 1) return walk(n.children[idx[0]], r, [...path, idx[0]])
     const axis = axisOf(n.dir)
     const kids = idx.map((i) => n.children[i])
-    const mins = kids.map((c) => minOf(c, axis, vis))
-    const main = grow.find((p) => vis[p] && kids.some((c) => contains(c, p)))
-    const flex = main ? kids.findIndex((c) => contains(c, main)) : kids.length - 1
+    const isFold = (c: DockNode) => axis === 1 && isLeaf(c) && !!folded[c.panel]
+    const mins = kids.map((c) => minOf(c, axis, vis, folded))
+    // quien se lleva el espacio libre nunca es un panel plegado (salvo que lo estén todos)
+    const open = kids.map((c, k) => (isFold(c) ? -1 : k)).filter((k) => k >= 0)
+    const main = grow.find((p) => vis[p] && !folded[p] && kids.some((c, k) => open.includes(k) && contains(c, p)))
+    const flex = main ? kids.findIndex((c, k) => open.includes(k) && contains(c, main)) : (open.at(-1) ?? kids.length - 1)
     const len = (axis === 0 ? r.w : r.h) - GAP * (kids.length - 1)
-    const sizes = allocate(kids.map((c) => c.size), mins, flex, len)
+    const sizes = allocate(
+      kids.map((c) => (isFold(c) ? FOLD_H : c.size)),
+      mins,
+      flex,
+      len
+    )
     let acc = axis === 0 ? r.x : r.y
     kids.forEach((c, k) => {
       const start = Math.round(acc)
       const end = Math.round(acc + sizes[k])
       const cr = axis === 0 ? { x: start, y: r.y, w: end - start, h: r.h } : { x: r.x, y: start, w: r.w, h: end - start }
       walk(c, cr, [...path, idx[k]])
-      if (k < kids.length - 1) {
+      // junto a un panel plegado no hay separador: su alto es el de la cabecera
+      if (k < kids.length - 1 && !isFold(c) && !isFold(kids[k + 1])) {
         const sr = axis === 0 ? { x: end, y: r.y, w: GAP, h: r.h } : { x: r.x, y: end, w: r.w, h: GAP }
         const nextEnd = Math.round(acc + sizes[k] + GAP + sizes[k + 1])
         out.splitters.push({

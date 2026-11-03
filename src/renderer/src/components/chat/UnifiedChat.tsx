@@ -2,13 +2,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, ChatItem, RouteDecision } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
 import { ORCH_MODES, OrchMode, Orchestration } from '@shared/orchestrator'
+import { EFFORT_NAMES } from '@shared/router'
 import { api } from '../../lib/api'
-import { askText, confirmAsync, toast } from '../../lib/app-store'
-import { SessionView, Target, usePS, useStore } from '../../lib/project-store'
+import { askText, confirmAsync, toast, useApp } from '../../lib/app-store'
+import { PendingSend, SessionView, Target, usePS, useStore } from '../../lib/project-store'
 import { timeAgo } from '../../lib/utils'
 import { AgentLogo, Icon } from '../Icons'
 import {
-  AgentPills, ContextChip, ContextChipView, Item, messageText, QueueList, SentImages, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions, Working
+  AgentPills, ContextChip, ContextChipView, CopyButton, Elapsed, finalAnswer, messageText, QueueList, SentImages, TurnItems, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions,
+  useModelLabel, Working
 } from './parts'
 import { TeamCard } from './TeamCard'
 
@@ -46,13 +48,32 @@ function buildTimeline(sessions: SessionView[], orchs: Orchestration[]): (Turn |
   return out.sort((a, b) => a.at - b.at)
 }
 
+// El motivo sin repetir lo que ya dice la primera fila: fuera el razonamiento y, del modelo, solo su porqué
+function routeWhy(route: RouteDecision): string {
+  if (route.method === 'manual') return 'Elegido por ti'
+  if (route.method === 'mention') return 'Mencionado con @'
+  return route.reason
+    .split(' · ')
+    .flatMap((seg, i) => {
+      if (/^razonamiento /.test(seg)) return []
+      const paren = i > 0 && seg.match(/^.+ \(([^)]+)\)$/)
+      return [paren ? paren[1] : seg]
+    })
+    .join(' · ')
+}
+
 function RouteChip({ route, agent }: { route?: RouteDecision; agent: AgentId }) {
+  const short = useModelLabel()
   return (
-    <span className={`route-chip agent-${agent}`} title={route?.reason}>
-      <span className="muted">→</span> <AgentLogo agent={agent} size={11} /> {AGENT_NAMES[agent]}
-      {route && <span className="muted"> · {route.method === 'manual' ? 'elegido por ti' : route.method === 'mention' ? 'mencionado' : route.reason.split('→')[0].trim()}</span>}
-      {route?.method === 'jev' && <span className="route-jev">Jev</span>}
-    </span>
+    <div className="route-info" title={route?.reason}>
+      <span className={`route-chip agent-${agent}`}>
+        <span className="muted">→</span> <AgentLogo agent={agent} size={11} /> {AGENT_NAMES[agent]}
+        {route?.model && <span className="route-model"> · {short(agent, route.model)}</span>}
+        {route?.effort && <span className="route-model"> · razonamiento {EFFORT_NAMES[route.effort] ?? route.effort}</span>}
+        {route?.method === 'jev' && <span className="route-jev">Jev</span>}
+      </span>
+      {route && <span className="route-why">{routeWhy(route)}</span>}
+    </div>
   )
 }
 
@@ -62,8 +83,11 @@ function TurnView({ t }: { t: Turn }) {
     <div className="turn">
       <div className="msg-user-wrap">
         <SentImages paths={t.user.images} />
-        <div className="msg-user">{t.user.text}</div>
-        <div className="row gap" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <div className="msg-user-line">
+          <CopyButton text={t.user.text} title="Copiar el mensaje" className="icon-btn msg-copy" />
+          <div className="msg-user">{t.user.text}</div>
+        </div>
+        <div className="row gap msg-user-meta">
           {t.user.context && <ContextChipView context={t.user.context} />}
           <RouteChip route={t.user.route} agent={s.agent} />
         </div>
@@ -72,14 +96,35 @@ function TurnView({ t }: { t: Turn }) {
         <div className="reply-head">
           <AgentLogo agent={s.agent} size={14} /> <b>{AGENT_NAMES[s.agent]}</b>
         </div>
-        {t.items.map((it) => (
-          <Item key={it.id} item={it} session={s} />
-        ))}
-        {t.last && s.running ? <Working session={s} /> : <TurnUndo sessionId={s.id} at={t.user.at} />}
+        <TurnItems items={t.items} session={s} done={!(t.last && s.running)} />
+        {t.last && s.running ? <Working session={s} /> : <TurnUndo sessionId={s.id} at={t.user.at} answer={finalAnswer(t.items)} />}
       </div>
     </div>
   )
 }
+
+// Mensaje recién enviado: se ve ya, mientras el motor decide a quién va (antes de que exista el turno real)
+function PendingTurn({ p }: { p: PendingSend }) {
+  return (
+    <div className="turn pending-turn">
+      <div className="msg-user-wrap">
+        <SentImages paths={p.images} />
+        <div className="msg-user">{p.text}</div>
+      </div>
+      <div className="reply">
+        <div className="working">
+          <span className="pulse" />
+          <span>Decidiendo quién se encarga…</span>
+          <span className="muted">
+            · <Elapsed since={p.at} />
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const stripMention = (t: string) => t.replace(/^@(claude|codex)\b\s*/i, '') || t
 
 function TeamEntryView({ o }: { o: Orchestration }) {
   return (
@@ -145,7 +190,7 @@ const TARGETS: { id: Target; label: string; hint: string }[] = [
   { id: 'team', label: 'Equipo', hint: 'Los dos se organizan: plan, reparto, revisión cruzada y tu aprobación' }
 ]
 
-const BIG_TASK = /(completo|completa|sistema de|frontend.*backend|backend.*frontend|end[- ]to[- ]end|con (tests|pruebas)|y (tests|pruebas)|varias? (pantallas|partes)|refactoriza todo|migra (todo|el proyecto))/i
+let lastWarm = 0
 
 function UnifiedComposer({ threadId }: { threadId: string | null }) {
   const ps = usePS()
@@ -155,10 +200,20 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
   const claudeSession = useStore((s) => (thread?.sessions.claude ? s.sessions[thread.sessions.claude] : undefined))
   const codexSession = useStore((s) => (thread?.sessions.codex ? s.sessions[thread.sessions.codex] : undefined))
   const [text, setText] = useState('')
-  const [preview, setPreview] = useState<RouteDecision | null>(null)
+  const defaultAgent = useApp((s) => s.settings?.defaultAgent ?? 'claude')
+  // modelo y razonamiento elegidos para un agente que aún no tiene conversación en este hilo
+  const [pins, setPins] = useState<Partial<Record<AgentId, { model?: string; effort?: string }>>>({})
+  useEffect(() => setPins({}), [threadId])
   const [menu, setMenu] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
   useAutosize(ta, text)
+  // al empezar a escribir se despierta Jev (tarda ~4 s en arrancar): así decide él al enviar y no las reglas
+  const typing = text.length > 0
+  useEffect(() => {
+    if (!typing || target === 'team' || Date.now() - lastWarm < 60_000) return
+    lastWarm = Date.now()
+    api.jev.warm().catch(() => {})
+  }, [typing, target])
   const mentions = useMentions(ta, text, setText, true)
   const att = useAttachments()
   const drop = useFileDrop((fn) => setText(fn), att.add)
@@ -173,34 +228,23 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
     return () => window.removeEventListener('focus-composer', focus)
   }, [])
 
-  // a quién irá el mensaje, mientras se escribe
-  useEffect(() => {
-    if (target !== 'auto') return setPreview(null)
-    // las respuestas que llegan tarde (de un texto anterior) se descartan
-    let alive = true
-    const t = setTimeout(
-      () =>
-        api.threads
-          .preview(threadId, text || 'hola')
-          .then((d) => alive && setPreview(d))
-          .catch(() => alive && setPreview(null)),
-      200
-    )
-    return () => ((alive = false), clearTimeout(t))
-  }, [text, target, threadId, claudeSession?.running, codexSession?.running])
-
-  const agent: AgentId | null = target === 'claude' || target === 'codex' ? target : target === 'auto' ? (preview?.agent ?? null) : null
+  // En Auto no se adivina a quién irá mientras escribes (cambiaría a cada tecla): se ven los ajustes del último que
+  // respondió en esta conversación (o del agente por defecto) y el motor decide al enviar.
+  const lastAgent: AgentId =
+    claudeSession && codexSession ? (claudeSession.updatedAt >= codexSession.updatedAt ? 'claude' : 'codex') : claudeSession ? 'claude' : codexSession ? 'codex' : defaultAgent
+  const agent: AgentId | null = target === 'claude' || target === 'codex' ? target : target === 'auto' ? lastAgent : null
   const session = agent === 'claude' ? claudeSession : agent === 'codex' ? codexSession : undefined
-  const busy = !!session?.running
+  // en Auto el mensaje solo espera en cola si los dos están ocupados (si no, va al libre)
+  const busy = target === 'auto' ? !!(claudeSession?.running && codexSession?.running) : !!session?.running
   const send = () => {
     const msg = messageText(text, att.paths)
     if (!msg) return
     if (target === 'team' && att.count) toast('El equipo trabaja con texto: las imágenes no se le envían', 'info')
-    ps.sendUnified(msg, target, target === 'team' ? undefined : att.paths)
+    const pick = (k: 'model' | 'effort') => Object.fromEntries(Object.entries(pins).flatMap(([a, p]) => (p?.[k] ? [[a, p[k]]] : [])))
+    ps.sendUnified(msg, target, target === 'team' ? undefined : att.paths, pick('model'), pick('effort'))
     setText('')
     att.clear()
   }
-  const big = target === 'auto' && (text.length > 260 || BIG_TASK.test(text))
   const T = TARGETS.find((x) => x.id === target)!
 
   return (
@@ -236,12 +280,6 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
             <button className={`target-btn t-${target}`} onClick={() => setMenu(!menu)} title={T.hint}>
               {target === 'team' ? <Icon.workflow size={13} /> : target === 'auto' ? <Icon.zap size={13} /> : <AgentLogo agent={target} size={13} />}
               {T.label}
-              {target === 'auto' && preview && (
-                <span className="target-preview" title={preview.reason}>
-                  → <AgentLogo agent={preview.agent} size={11} /> {AGENT_NAMES[preview.agent]}
-                  {preview.method === 'jev' && <span className="route-jev">Jev</span>}
-                </span>
-              )}
               <Icon.chevronDown size={11} />
             </button>
             {menu && (
@@ -270,17 +308,24 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
               </select>
             </label>
           ) : (
-            agent && <AgentPills agent={agent} session={session} compact />
-          )}
-          {big && (
-            <button className="chip warn" onClick={() => ps.set({ target: 'team' })} title="Que lo planifiquen y se lo repartan">
-              <Icon.workflow size={11} /> ¿Tarea grande? Usa Equipo
-            </button>
+            agent && (
+              <AgentPills
+                agent={agent}
+                session={session}
+                compact
+                unified
+                pin={{
+                  model: pins[agent]?.model ?? '',
+                  effort: pins[agent]?.effort ?? '',
+                  set: (k, v) => setPins((p) => ({ ...p, [agent]: { ...p[agent], [k]: v } }))
+                }}
+              />
+            )
           )}
           <ContextChip />
           <span style={{ flex: 1 }} />
           {target !== 'team' && att.button}
-          {busy && session && (
+          {session?.running && (
             <button className="send-btn stop" title="Detener" onClick={() => ps.cancelSession(session.id)}>
               <Icon.stop size={12} />
             </button>
@@ -339,6 +384,15 @@ function ThreadHeader() {
       </div>
       {active && (
         <>
+          {active.sessions.claude && (
+            <button
+              className="icon-btn"
+              title="Compactar: Claude resume lo hablado y sigue con menos contexto (Codex compacta su parte solo, según Ajustes)"
+              onClick={() => ps.compactThread(active.id)}
+            >
+              <Icon.layers size={13} />
+            </button>
+          )}
           <button
             className="icon-btn"
             title="Renombrar"
@@ -375,11 +429,22 @@ export function UnifiedChat() {
   const threadOrchs = useMemo(() => Object.values(orchs).filter((o) => o.threadId && o.threadId === threadId), [orchs, threadId])
   const timeline = useMemo(() => buildTimeline([claude, codex].filter((s): s is SessionView => !!s), threadOrchs), [claude, codex, threadOrchs])
   const myQueue = useMemo(() => queue.filter((q) => q.threadId && q.threadId === threadId), [queue, threadId])
+  // pendientes de este hilo; en cuanto llega el turno real (mismo texto) dejan de pintarse para no duplicar
+  const allPending = useStore((s) => s.pending)
+  const pending = useMemo(
+    () =>
+      allPending.filter(
+        (p) =>
+          (p.threadId === threadId || p.threadId === null) &&
+          !timeline.some((e) => e.kind === 'turn' && e.user.at >= p.at - 2000 && (e.user.text === p.text || e.user.text === stripMention(p.text)))
+      ),
+    [allPending, timeline, threadId]
+  )
 
   useLayoutEffect(() => {
     const el = ref.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [timeline])
+  }, [timeline, pending])
   useLayoutEffect(() => {
     stick.current = true
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
@@ -394,7 +459,7 @@ export function UnifiedChat() {
   return (
     <div className="agent-col unified">
       <ThreadHeader />
-      {timeline.length === 0 ? (
+      {timeline.length === 0 && pending.length === 0 ? (
         <EmptyUnified onPick={pick} />
       ) : (
         <div
@@ -407,6 +472,9 @@ export function UnifiedChat() {
         >
           <div className="chat-inner">
             {timeline.map((e) => (e.kind === 'turn' ? <TurnView key={e.key} t={e} /> : <TeamEntryView key={e.key} o={e.o} />))}
+            {pending.map((p) => (
+              <PendingTurn key={p.id} p={p} />
+            ))}
           </div>
         </div>
       )}

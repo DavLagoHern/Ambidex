@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron'
 
-const PUSH = new Set(['session:items', 'session:meta', 'run:status', 'limits', 'fs:changed', 'term:data', 'term:exit', 'menu', 'focus-project', 'thread:meta', 'queue:changed', 'orch:update', 'open-path', 'web:open', 'web:key', 'web:issue', 'web:agent-open', 'web:agent', 'panel:closed', 'panel:sync', 'jev:status'])
+const PUSH = new Set(['session:items', 'session:meta', 'run:status', 'limits', 'fs:changed', 'term:data', 'term:exit', 'menu', 'focus-project', 'thread:meta', 'queue:changed', 'orch:update', 'open-path', 'web:open', 'web:key', 'web:issue', 'web:agent-open', 'web:agent', 'panel:closed', 'panel:sync', 'jev:status', 'cli:update', 'self:update'])
 
 contextBridge.exposeInMainWorld('bridge', {
   invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),

@@ -76,6 +76,7 @@ export const COMMANDS: Command[] = [
 
   { id: 'toggle-sidebar', title: 'Mostrar/ocultar barra lateral', group: 'Ver', shortcut: '⌘B', icon: 'panelLeft', needsProject: true, run: () => ps()?.togglePanel('sidebar') },
   { id: 'toggle-right', title: 'Mostrar/ocultar el panel de agentes', group: 'Ver', shortcut: '⌥⌘B', icon: 'activity', needsProject: true, run: () => ps()?.togglePanel('right') },
+  { id: 'toggle-activity', title: 'Mostrar/ocultar el panel de actividad', group: 'Ver', icon: 'log', needsProject: true, run: () => ps()?.togglePanel('activity') },
   { id: 'toggle-web', title: 'Mostrar/ocultar el visor web', group: 'Ver', icon: 'globe', needsProject: true, run: () => ps()?.toggleWeb() },
   { id: 'web-new-tab', title: 'Web: pestaña nueva', group: 'Ver', icon: 'globe', needsProject: true, run: () => ps()?.addWebTab() },
   { id: 'toggle-bottom', title: 'Mostrar/ocultar la terminal', group: 'Ver', shortcut: '⌘J', icon: 'terminal', needsProject: true, run: () => ps()?.togglePanel('bottom') },
@@ -85,7 +86,8 @@ export const COMMANDS: Command[] = [
       ['chat', 'el chat'],
       ['terminal', 'la terminal'],
       ['editor', 'el editor'],
-      ['agents', 'los agentes']
+      ['agents', 'los agentes'],
+      ['activity', 'la actividad']
     ] as const
   ).map(([p, label]): Command => ({ id: `popout-${p}`, title: `Abrir ${label} en una ventana nueva`, group: 'Ver', icon: 'popout', needsProject: true, run: () => ps()?.popOut(p) })),
   ...PRESETS.map(

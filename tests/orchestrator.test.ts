@@ -31,7 +31,6 @@ function setup(env: Record<string, string> = {}) {
     resolveBin: () => FAKE_CLI,
     env: () => childEnv,
     defaultModel: () => undefined,
-    allowUnrestricted: () => false,
     onIdle: (s) => dispatcher?.onIdle(s),
     uiThrottleMs: 5,
     dbThrottleMs: 10
@@ -86,6 +85,49 @@ describe('orquestador (agentes simulados con el formato real de cada CLI)', () =
     expect(s.orch.get(o.id)!.worktrees.every((w) => w.status === 'removed')).toBe(true)
     expect(existsSync(claudeWt.path)).toBe(false)
     expect(git(s.repo, 'branch', '--list', 'ambidex/*').trim()).toBe('')
+  })
+
+  it('modo C: los dos proponen, acuerdan el plan, se revisan, comprueban el resultado juntos y escriben un resumen', async () => {
+    const s = setup({ FAKE_FINAL_CHANGES: '1' })
+    const o = await start(s, 'C', false)
+    await waitFor(() => ['awaiting_approval', 'failed', 'needs_user'].includes(s.orch.get(o.id)!.status), 45000)
+    const d = s.orch.get(o.id)!
+    expect(d.error).toBeUndefined()
+    expect(d.status).toBe('awaiting_approval')
+    const texts = d.messages.map((m) => `${m.kind}|${m.from}|${m.text}`)
+    // 1) las dos propuestas, cada una de su agente
+    const proposals = d.messages.filter((m) => m.kind === 'plan' && / propone: /.test(m.text)).map((m) => m.from).sort()
+    expect(proposals).toEqual(['claude', 'codex'])
+    // 2) el plan acordado y la conformidad del otro agente
+    expect(texts.some((t) => t.startsWith('plan|claude|Plan acordado'))).toBe(true)
+    expect(d.messages.some((m) => m.kind === 'review' && m.from === 'codex' && m.to === 'claude' && /de acuerdo con el plan/.test(m.text))).toBe(true)
+    // 3) el reparto entre los dos
+    expect(new Set(d.tasks.map((t) => t.assignee))).toEqual(new Set(['claude', 'codex']))
+    // 4) revisión final de los dos: uno pidió ajustes, se aplicaron y el resultado los incluye
+    const finals = d.messages.filter((m) => m.kind === 'review' && m.to === 'user')
+    expect(finals.map((m) => m.from).sort()).toEqual(['claude', 'codex'])
+    expect(finals.some((m) => /pide ajustes finales/.test(m.text))).toBe(true)
+    expect(d.messages.some((m) => m.kind === 'fix' && /Ajustes aplicados/.test(m.text))).toBe(true)
+    const ch = await s.orch.changes(o.id)
+    expect(ch.files.map((f) => f.path)).toContain('final.txt')
+    expect(d.testResult).toMatchObject({ ok: true })
+    // 5) el resumen, en el último mensaje de contenido
+    const summary = d.messages.find((m) => m.kind === 'summary')
+    expect(summary?.text).toContain('Resumen')
+    expect(summary?.to).toBe('user')
+    // el resumen llega después de las revisiones finales
+    expect(d.messages.findIndex((m) => m.kind === 'summary')).toBeGreaterThan(d.messages.findLastIndex((m) => m.kind === 'review'))
+  })
+
+  it('modo C: si un agente no puede proponer, el plan sale de la propuesta del otro', async () => {
+    const s = setup({ FAKE_FAIL_PROPOSAL: 'codex' })
+    const o = await start(s, 'C', true)
+    await waitFor(() => ['awaiting_plan', 'failed'].includes(s.orch.get(o.id)!.status), 30000)
+    const d = s.orch.get(o.id)!
+    expect(d.status).toBe('awaiting_plan')
+    expect(d.messages.some((m) => m.kind === 'warning' && /Codex no pudo hacer su propuesta/.test(m.text))).toBe(true)
+    expect(d.messages.some((m) => m.kind === 'warning' && /Solo hay una propuesta/.test(m.text))).toBe(true)
+    expect(d.tasks.length).toBeGreaterThan(0)
   })
 
   it('la revisión pide cambios, el implementador corrige y se vuelve a revisar', async () => {

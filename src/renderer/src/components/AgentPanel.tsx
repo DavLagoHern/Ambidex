@@ -5,7 +5,7 @@ import { setApp, useApp } from '../lib/app-store'
 import { SessionView, usePS, useStore } from '../lib/project-store'
 import { fmtTokens, timeAgo } from '../lib/utils'
 import {
-  AgentPills, ContextChip, Item, messageText, QueueList, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions, Working
+  AgentPills, ContextChip, finalAnswer, Item, messageText, QueueList, TurnItems, TurnUndo, useAttachments, useAutosize, useComposerInsert, useFileDrop, useMentions, Working
 } from './chat/parts'
 import { UnifiedChat } from './chat/UnifiedChat'
 import { AgentLogo, Icon } from './Icons'
@@ -19,18 +19,22 @@ const SUGGESTIONS = [
 
 // ---------- chat con un agente ----------
 
-// Los mensajes de la conversación con «deshacer» al final de cada turno que tocó ficheros
+// Los mensajes de la conversación por turnos: los pasos de cada turno terminado se pliegan, y «deshacer» al final
+// de cada turno que tocó ficheros
 function withUndo(session: SessionView) {
   const out: ReactNode[] = []
-  let turn: number | null = null
-  for (const it of session.items ?? []) {
-    if (it.type === 'user') {
-      if (turn !== null) out.push(<TurnUndo key={`undo-${turn}`} sessionId={session.id} at={turn} />)
-      turn = it.at
-    }
-    out.push(<Item key={it.id} item={it} session={session} />)
-  }
-  if (turn !== null && !session.running) out.push(<TurnUndo key={`undo-${turn}`} sessionId={session.id} at={turn} />)
+  const items = session.items ?? []
+  const starts = items.flatMap((it, i) => (it.type === 'user' ? [i] : []))
+  if (!starts.length) return items.map((it) => <Item key={it.id} item={it} session={session} />)
+  for (const it of items.slice(0, starts[0])) out.push(<Item key={it.id} item={it} session={session} />)
+  starts.forEach((start, n) => {
+    const user = items[start]
+    const last = n === starts.length - 1
+    const done = !(last && session.running)
+    out.push(<Item key={user.id} item={user} session={session} />)
+    out.push(<TurnItems key={`turn-${user.id}`} items={items.slice(start + 1, starts[n + 1])} session={session} done={done} />)
+    if (done && user.at !== undefined) out.push(<TurnUndo key={`undo-${user.id}`} sessionId={session.id} at={user.at} answer={finalAnswer(items.slice(start + 1, starts[n + 1]))} />)
+  })
   return out
 }
 
@@ -152,6 +156,16 @@ function SessionHeader({ agent, session, compact }: { agent: AgentId; session?: 
       {info?.auth && !info.auth.loggedIn && (
         <button className="chip warn" onClick={() => setApp({ loginAgent: agent })}>
           <Icon.login size={11} /> Iniciar sesión
+        </button>
+      )}
+      {agent === 'claude' && session?.agentSessionId && (
+        <button
+          className="icon-btn"
+          disabled={session.running}
+          title="Compactar: Claude resume lo hablado y sigue con menos contexto (cada paso relee menos tokens)"
+          onClick={() => ps.compactSession(session.id)}
+        >
+          <Icon.layers size={14} />
         </button>
       )}
       <button className="icon-btn" title="Nueva conversación (⌘N)" onClick={() => ps.newSession(agent)}>
@@ -351,7 +365,9 @@ export function AgentPanel() {
   const busyKey = useStore((s) =>
     Object.values(s.sessions)
       .filter((x) => x.running)
-      .map((x) => x.agent)
+      // Las sesiones del chat conjunto y del equipo pertenecen a Ambos,
+      // aunque sea uno de los agentes quien esté ejecutando el turno.
+      .map((x) => x.threadId || x.orchestrationId ? 'ambos' : x.agent)
       .join(',')
   )
   const mode = view === 'auto' || view === 'both' ? 'ambos' : view
@@ -378,7 +394,14 @@ export function AgentPanel() {
                 <AgentLogo agent={m.id} size={14} />
               )}
               <span className="lbl">{m.label}</span>
-              {m.id !== 'ambos' && busyKey.includes(m.id) && <span className={`pulse small agent-${m.id}`} />}
+              {busyKey.includes(m.id) && (
+                <span
+                  className={`pulse small agent-${m.id}`}
+                  role="status"
+                  aria-label="En curso"
+                  title={`En curso en ${m.label}`}
+                />
+              )}
             </button>
           ))}
           {/* en una ventana de panel la Web está en la ventana principal */}

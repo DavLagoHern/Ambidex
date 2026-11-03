@@ -5,7 +5,7 @@ import { AGENT_NAMES } from './types'
 export type OrchMode = 'A' | 'B' | 'C' | 'D' | 'E'
 
 export const ORCH_MODES: { id: OrchMode; title: string; detail: string }[] = [
-  { id: 'C', title: 'Colaboración automática', detail: 'Se planifica y reparte el trabajo entre los dos según dependencias; cada uno revisa al otro.' },
+  { id: 'C', title: 'Colaboración automática', detail: 'Los dos proponen por separado y acuerdan un plan; se reparten el trabajo, se revisan entre ellos, comprueban juntos el resultado final y escriben un resumen.' },
   { id: 'A', title: 'Claude lidera', detail: 'Claude planifica y revisa; Codex implementa.' },
   { id: 'B', title: 'Codex lidera', detail: 'Codex planifica y revisa; Claude implementa.' },
   { id: 'D', title: 'Revisión cruzada', detail: 'Un agente implementa todo y el otro revisa, pide correcciones y verifica.' },
@@ -98,7 +98,7 @@ export interface OrchMessage {
   at: number
   from: AgentId | 'system' | 'user'
   to?: AgentId | 'system' | 'user'
-  kind: 'info' | 'plan' | 'handoff' | 'result' | 'review' | 'fix' | 'test' | 'integration' | 'warning' | 'error'
+  kind: 'info' | 'plan' | 'handoff' | 'result' | 'review' | 'fix' | 'test' | 'integration' | 'warning' | 'error' | 'summary'
   text: string
 }
 
@@ -320,6 +320,132 @@ ${rule}
 - acceptance: criterios verificables.
 - testCommand: el comando para ejecutar las pruebas del proyecto (p. ej. "npm test"), o "" si no hay pruebas.
 No modifiques ningún fichero. Responde con el plan estructurado.`
+}
+
+// ---------- colaboración (modo C): propuesta conjunta, acuerdo, revisión final y resumen ----------
+
+const planRules = `Reglas del plan:
+- Divide el trabajo en entre 1 y 6 subtareas concretas; cada una la hará un agente en una sola sesión, en su propio git worktree, y debe dejar el código funcionando.
+- dependsOn: solo si una tarea necesita de verdad el resultado de otra. Las tareas sin dependencias se ejecutan en paralelo. Evita que dos tareas paralelas modifiquen los mismos ficheros.
+- assignee: reparte entre "claude" y "codex" según a quién se le da mejor cada tarea y equilibrando la carga.
+- acceptance: criterios verificables.
+- testCommand: el comando para ejecutar las pruebas (p. ej. "npm test"), o "" si no hay.`
+
+export function proposalPrompt(request: string, agent: AgentId): string {
+  return `${TEAM}
+Eres el PROPONENTE (${AGENT_NAMES[agent]}). El otro agente prepara su propia propuesta a la vez, sin ver la tuya; después las comparáis y acordáis un plan.
+Petición del usuario:
+<peticion>
+${request}
+</peticion>
+
+Inspecciona el proyecto de la carpeta actual (solo lectura) y propón cómo lo harías.
+${planRules}
+No modifiques ningún fichero. En summary explica tu enfoque y por qué.`
+}
+
+export function consolidatePrompt(request: string, proposals: { agent: AgentId; plan: Plan }[]): string {
+  const body = proposals.map((p) => `Propuesta de ${AGENT_NAMES[p.agent]}:\n${JSON.stringify(p.plan, null, 1)}`).join('\n\n')
+  return `${TEAM}
+Eres el PLANIFICADOR. Los dos agentes han hecho una propuesta por separado y ahora hay que acordar UN plan que aproveche lo mejor de cada una.
+Petición del usuario:
+<peticion>
+${request}
+</peticion>
+
+${body}
+
+Inspecciona el proyecto (solo lectura), compara ambas propuestas y redacta el plan definitivo: quédate con lo mejor de cada una, resuelve las diferencias y reparte las tareas entre los dos.
+${planRules}
+En summary explica en 3-5 frases qué has tomado de cada propuesta y por qué reparties así el trabajo. No modifiques ningún fichero.`
+}
+
+export function agreementPrompt(request: string, plan: Plan, planner: AgentId): string {
+  return `${TEAM}
+Eres el REVISOR DEL PLAN. ${AGENT_NAMES[planner]} ha redactado el plan definitivo combinando las dos propuestas.
+Petición del usuario:
+<peticion>
+${request}
+</peticion>
+
+Plan:
+${JSON.stringify(plan, null, 1)}
+
+Comprueba (solo lectura) que cubre la petición, que el reparto y las dependencias tienen sentido y que no hay tareas paralelas que pisen los mismos ficheros.
+verdict "approve" si estás de acuerdo; "changes" solo para problemas reales del plan, con issues concretos (file puede ir vacío).`
+}
+
+export function revisePlanPrompt(request: string, plan: Plan, review: Review, reviewer: AgentId): string {
+  const issues = review.issues.map((i) => `- [${i.severity}] ${i.description}`).join('\n')
+  return `${TEAM}
+Eres el PLANIFICADOR. ${AGENT_NAMES[reviewer]} ha revisado tu plan y pide ajustes:
+${review.summary}
+${issues}
+
+Petición del usuario:
+<peticion>
+${request}
+</peticion>
+
+Plan actual:
+${JSON.stringify(plan, null, 1)}
+
+Devuelve el plan corregido con las mismas reglas (1-6 tareas, dependencias solo si son reales, reparto entre "claude" y "codex"). No modifiques ningún fichero.`
+}
+
+export function finalReviewPrompt(o: { request: string; plan?: Plan; diff: string; reviewer: AgentId; testNote: string }): string {
+  return `${TEAM}
+Eres el REVISOR FINAL (${AGENT_NAMES[o.reviewer]}). El trabajo de los dos ya está integrado en una sola rama y vas a comprobar el resultado completo, como si fueras a aprobarlo tú.
+Petición del usuario:
+<peticion>
+${o.request}
+</peticion>
+${o.plan?.summary ? `\nPlan acordado: ${o.plan.summary}\n` : ''}
+${o.testNote}
+
+Cambios integrados (diff respecto al inicio):
+\`\`\`diff
+${o.diff || '(sin cambios)'}
+\`\`\`
+
+Puedes leer los ficheros de la carpeta actual. No modifiques nada. Comprueba que se cumple la petición completa, que las piezas de los dos agentes encajan entre sí y que no quedan errores.
+verdict "approve" si está listo; "changes" solo para problemas reales (bugs, partes de la petición sin hacer, piezas que no encajan), nunca por estilo. Cada issue, concreto y accionable.`
+}
+
+export function finalFixPrompt(issues: { by: AgentId; review: Review }[]): string {
+  const body = issues
+    .map((r) => `${AGENT_NAMES[r.by]}: ${r.review.summary}\n${r.review.issues.map((i) => `- [${i.severity}]${i.file ? ` ${i.file}:` : ''} ${i.description}`).join('\n')}`)
+    .join('\n\n')
+  return `${TEAM}
+Tras integrar el trabajo del equipo, la revisión final pide ajustes:
+${body}
+
+Aplícalos en esta rama (es la integración de los dos agentes). No hagas commits. Resume lo que has cambiado.`
+}
+
+export function summaryPrompt(o: {
+  request: string
+  plan?: Plan
+  tasks: OrchTask[]
+  reviews: { by: AgentId; review: Review }[]
+  tests: string
+  fixed: boolean
+}): string {
+  const tasks = o.tasks.map((t) => `- ${t.key} (${AGENT_NAMES[t.assignee]}): ${t.title}. ${(t.result?.summary ?? '').split('\n')[0].slice(0, 200)}`).join('\n')
+  const reviews = o.reviews.map((r) => `- ${AGENT_NAMES[r.by]}: ${r.review.verdict === 'approve' ? 'aprueba' : 'pidió ajustes'}. ${r.review.summary}`).join('\n')
+  return `${TEAM}
+Eres el AUTOR DEL RESUMEN: escribe, en nombre de los dos, el RESUMEN final para el usuario. Lo leerá antes de decidir si integra el resultado.
+Petición:
+${o.request}
+
+${o.plan?.summary ? `Plan acordado: ${o.plan.summary}\n` : ''}Trabajo hecho:
+${tasks}
+
+Revisión final cruzada:
+${reviews || '(sin revisiones)'}${o.fixed ? '\nSe aplicaron ajustes tras la revisión final.' : ''}
+Pruebas: ${o.tests}
+
+Escribe en español, en Markdown breve (máximo ~15 líneas): qué se ha conseguido, quién hizo qué, cómo se revisaron entre ellos, estado de las pruebas y cualquier cosa pendiente o que el usuario deba mirar. Sin modificar ficheros.`
 }
 
 export function taskPrompt(o: { request: string; plan?: Plan; task: OrchTask; branch: string; handoffs: string[]; conflicts: string[] }): string {

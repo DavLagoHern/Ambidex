@@ -39,7 +39,8 @@ export function parseCodexCatalog(json: string, configModel?: string): CodexMode
     id: m.slug,
     label: `${m.display_name || m.slug}${m.visibility === 'hide' ? ' (oculto)' : ''}`,
     efforts: (m.supported_reasoning_levels || []).map(levelOf).filter(Boolean),
-    defaultEffort: m.default_reasoning_level
+    defaultEffort: m.default_reasoning_level,
+    hidden: m.visibility === 'hide' || undefined
   }))
   return { models, listed: raw.filter((m) => m.visibility !== 'hide').map((m) => m.slug), configModel }
 }

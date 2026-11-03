@@ -140,7 +140,15 @@ export interface ThreadMeta {
   sessions: Partial<Record<AgentId, string>>
 }
 
-export type RouteCategory = 'plan' | 'explain' | 'implement' | 'debug' | 'tests' | 'review' | 'frontend' | 'terminal'
+// Tipos de tarea del enrutado: los de serie y los que añada el usuario (Ajustes → Motor de enrutado)
+export type BuiltinCategory = 'plan' | 'explain' | 'implement' | 'debug' | 'tests' | 'review' | 'frontend' | 'terminal'
+export type RouteCategory = string
+// nombre que se ve y descripción que lee Jev para decidir (puede estar en español)
+export interface RouteCategoryDef {
+  id: RouteCategory
+  label: string
+  description: string
+}
 
 // Jev (modelo local de decisiones) para el enrutado
 export type JevState = 'unsupported' | 'missing' | 'installing' | 'stopped' | 'starting' | 'ready' | 'error'
@@ -161,6 +169,8 @@ export interface JevTest {
   confidence?: number
   probabilities: Partial<Record<RouteCategory, number>>
   followUp?: number
+  tier?: ModelTier
+  tierConfidence?: number
 }
 
 export interface RouteDecision {
@@ -168,6 +178,67 @@ export interface RouteDecision {
   reason: string
   method: 'manual' | 'mention' | 'rules' | 'ai' | 'jev'
   category?: RouteCategory
+  // modelo del turno: elegido por dificultad o fijado en la conversación
+  model?: string
+  tier?: ModelTier
+  // razonamiento del turno: automático (medio salvo que Jev vea clara la dificultad) o fijado en la conversación
+  effort?: string
+  // seguridad de Jev en la dificultad (0–1), para ver por qué subió o no el razonamiento
+  tierConfidence?: number
+}
+
+// Dificultad estimada de un mensaje: decide qué modelo de cada agente lo atiende
+export type ModelTier = 'hard' | 'easy'
+
+export interface AgentModelPolicy {
+  // modelos que el enrutado puede elegir
+  allowed: string[]
+  hard: string
+  easy: string
+}
+
+export interface ModelPolicy {
+  // en el chat único, elegir el modelo de cada mensaje según su dificultad
+  auto: boolean
+  // y el razonamiento: medio por defecto, alto o bajo solo si Jev lo ve claro (sin el campo: activado)
+  autoEffort?: boolean
+  claude: AgentModelPolicy
+  codex: AgentModelPolicy
+}
+
+export const DEFAULT_MODEL_POLICY: ModelPolicy = {
+  auto: true,
+  autoEffort: true,
+  claude: { allowed: ['claude-opus-5-5', 'claude-sonnet-5-5'], hard: 'claude-opus-5-5', easy: 'claude-sonnet-5-5' },
+  codex: { allowed: ['gpt-6.1-sol', 'gpt-6.1-terra'], hard: 'gpt-6.1-sol', easy: 'gpt-6.1-terra' }
+}
+
+// Actualización de un CLI: la app compara la versión instalada con la publicada y, si hay una nueva, la instala
+export type CliUpdateState = 'checking' | 'current' | 'available' | 'waiting' | 'updating' | 'updated' | 'behind' | 'manual' | 'missing' | 'error'
+export interface CliUpdate {
+  agent: AgentId
+  state: CliUpdateState
+  installed?: string
+  latest?: string
+  // con qué se actualiza: Homebrew, npm o el propio CLI
+  method?: string
+  message?: string
+  checkedAt?: number
+}
+
+// Actualización de Ambidex: se compila desde un clon de GitHub; al abrir se trae lo último, se recompila y se instala al reiniciar
+export type AppUpdateState = 'off' | 'idle' | 'checking' | 'current' | 'pulling' | 'building' | 'ready' | 'blocked' | 'error'
+export interface AppUpdate {
+  state: AppUpdateState
+  // versión que se instalará y commits nuevos
+  version?: string
+  commits?: number
+  from?: string
+  to?: string
+  message?: string
+  // carpeta del clon
+  source?: string
+  checkedAt?: number
 }
 
 export interface SessionCreate {
@@ -246,6 +317,8 @@ export interface AgentModel {
   label: string
   efforts: string[]
   defaultEffort?: string
+  // el catálogo lo oculta (modelos internos de Codex)
+  hidden?: boolean
 }
 
 export interface AgentInfo {
@@ -366,7 +439,6 @@ export interface Settings {
   codexSandbox: CodexSandbox
   commitAgent: AgentId
   defaultAgent: AgentId
-  allowUnrestricted: boolean
   stripApiKeys: boolean
   theme: Theme
   notifications: boolean
@@ -376,6 +448,15 @@ export interface Settings {
   // rules: palabras clave · jev: modelo local de decisiones (jevos) · ai: Claude Haiku
   routerMode: 'rules' | 'ai' | 'jev'
   routePrefs: Record<RouteCategory, AgentId | 'any'>
+  // tipos de tarea editados o añadidos (sin el campo: los de serie) y criterios de dificultad editados
+  routeCategories?: RouteCategoryDef[]
+  difficultyCriteria?: Partial<Record<ModelTier, string>>
+  // qué modelos puede usar el enrutado y cuál para tareas difíciles o sencillas
+  modelPolicy: ModelPolicy
+  // instalar solas las versiones nuevas de los CLI
+  autoUpdateClis: boolean
+  // traer y compilar la última versión de Ambidex al abrir
+  autoUpdateApp: boolean
   // orquestador (modo Equipo)
   orchMode: 'A' | 'B' | 'C' | 'D' | 'E'
   orchMaxRounds: number
@@ -384,6 +465,9 @@ export interface Settings {
   worktreeDir?: string
   // Codex: red dentro del sandbox de escritura y búsqueda web
   codexNetwork: boolean
+  // los dos agentes compactan su conversación al pasar de estos tokens de contexto (0: lo que decida cada CLI).
+  // Es un único tope para que en Ambos los dos guarden la misma memoria y cualquiera pueda seguir el hilo
+  autoCompact: number
   codexWebSearch: 'default' | 'live' | 'disabled'
   // los agentes pueden usar la pestaña Web del proyecto (abrir, leer, pulsar, escribir, capturar)
   agentWeb?: boolean
@@ -397,6 +481,8 @@ export interface LayoutShow {
   terminal: boolean
   web: boolean
   agents: boolean
+  // diseños guardados antes de este panel no lo tienen: se ve si se veían los agentes
+  activity?: boolean
   code: boolean
 }
 
@@ -475,22 +561,31 @@ export const DEFAULT_ROUTE_PREFS: Record<RouteCategory, AgentId | 'any'> = {
   terminal: 'codex'
 }
 
+// Tope de contexto a partir del cual cada agente resume su conversación. Los modelos actuales admiten 500k–1M,
+// pero cada paso (cada herramienta) relee todo el contexto: con 200k hay memoria de sobra para una tarea larga y
+// el gasto por paso queda acotado.
+export const DEFAULT_AUTO_COMPACT = 200_000
+
 export const DEFAULT_SETTINGS: Settings = {
   claudeMode: 'acceptEdits',
   codexSandbox: 'workspace-write',
   commitAgent: 'claude',
   defaultAgent: 'claude',
-  allowUnrestricted: false,
   stripApiKeys: true,
   theme: 'dark',
   notifications: true,
   routerMode: 'rules',
   routePrefs: DEFAULT_ROUTE_PREFS,
+  modelPolicy: DEFAULT_MODEL_POLICY,
+  autoUpdateClis: true,
+  autoUpdateApp: true,
   orchMode: 'C',
   orchMaxRounds: 2,
   orchApprovePlan: true,
   orchParallel: 2,
   codexNetwork: false,
+  // 200k: memoria de sobra para trabajar sin que cada paso relea medio millón de tokens
+  autoCompact: DEFAULT_AUTO_COMPACT,
   codexWebSearch: 'default'
 }
 

@@ -68,6 +68,9 @@ describe('Claude Code (stream-json real, v2.1.316)', () => {
 
   it('ignora líneas que no son JSON', () => {
     expect(claudeAdapter.createParser().onLine('esto no es json')).toEqual([])
+    // compactar: el aviso dice cuánto contexto queda
+    const cb = JSON.stringify({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 27248, post_tokens: 8637 } })
+    expect(claudeAdapter.createParser().onLine(cb)).toEqual([{ kind: 'notice', text: 'Conversación compactada: 27.2k → 8.6k tokens de contexto' }])
   })
 
   it('construye argumentos sin el prompt (va por stdin) y con un modo válido', () => {
