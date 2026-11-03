@@ -26,33 +26,43 @@ const STATUS: Record<RunInfo["status"], { label: string; cls: string }> = {
 
 function ProcessCard({ session, run }: { session: SessionView; run?: RunInfo }) {
   const ps = usePS();
-  const activity = useStore((s) => s.activity);
   const queue = useStore((s) => s.queue);
   const threads = useStore((s) => s.threads);
   const orchs = useStore((s) => s.orchs);
   const running = session.running;
   const now = useNow(running);
-  const last = activity.find((a) => a.sessionId === session.id && (a.kind === "tool" || a.kind === "files" || a.kind === "error") && (!run || a.at >= run.startedAt));
   const threadId = session.threadId ?? (session.orchestrationId ? orchs[session.orchestrationId]?.threadId : undefined);
   const waiting = queue.filter((q) => q.sessionId === session.id || (threadId && q.threadId === threadId)).length;
   const st = running ? STATUS.running : run ? STATUS[run.status] : null;
   const title = (threadId && threads[threadId]?.title) || session.title || run?.sessionTitle || "Conversación";
   return (
-    <button className={`act-process ${running ? "running" : ""}`} onClick={() => ps.focusSession(session.id)} title="Ir a esta conversación">
-      <span className="act-process-top">
-        <span className="act-process-title ellipsis">{threadId || session.orchestrationId ? <span className="act-where">Ambos · </span> : null}{title}</span>
-        {st && <span className={`status-chip ${st.cls}`}>{running && <span className={`pulse small agent-${session.agent}`} />}{st.label}</span>}
-      </span>
-      <span className="act-process-detail">
-        {run && <span><Icon.clock size={11} /> {running ? durationText(now - run.startedAt) : `${durationText((run.endedAt ?? run.startedAt) - run.startedAt)} · ${timeAgo((run.endedAt ?? run.startedAt) / 1000)}`}</span>}
-        {waiting > 0 && <span>{waiting} en cola</span>}
-      </span>
-      {running && last && <span className="act-now mono small ellipsis" title={last.detail}>{last.status === "running" ? <Icon.spinner size={11} className="spin" /> : <Icon.check size={11} />} {last.text} {last.detail}</span>}
+    <button className={`act-process ${running ? "running" : ""} ${st?.cls ?? ""}`} onClick={() => ps.focusSession(session.id)} title={`${title} · ${running ? "Procesando" : st?.label ?? ""}`}>
+      {running ? <span className={`pulse small agent-${session.agent}`} /> : <span className={`act-dot ${st?.cls ?? "muted"}`} />}
+      <span className="act-process-title ellipsis">{threadId || session.orchestrationId ? <span className="act-where">Ambos · </span> : null}{title}</span>
+      {waiting > 0 && <span className="act-process-queue" title={`${waiting} en cola`}>{waiting}</span>}
+      {run && <span className="act-process-time">{running ? durationText(now - run.startedAt) : timeAgo((run.endedAt ?? run.startedAt) / 1000)}</span>}
     </button>
   );
 }
 
+// Las tarjetas finalizadas pasan al grupo al minuto. El grupo conserva como máximo
+// diez conversaciones de las últimas 24 horas; el historial completo sigue en Actividad.
+const GROUP_AFTER = 60_000;
+const KEEP_FINISHED = 24 * 3600_000;
+const MAX_FINISHED = 10;
+
 function AgentCard({ agent }: { agent: AgentId }) {
+  const ps = usePS();
+  const now = useNow(true);
+  const storageKey = `ambidex.finished-cleared.${ps.id}.${agent}`;
+  const [clearedAt, setClearedAt] = useState(() => {
+    try { return Number(localStorage.getItem(storageKey)) || 0; } catch { return 0; }
+  });
+  const clearFinished = () => {
+    const at = Date.now() - GROUP_AFTER;
+    setClearedAt(at);
+    try { localStorage.setItem(storageKey, String(at)); } catch { /* sin almacenamiento */ }
+  };
   const sessions = useStore((s) => s.sessions);
   const runs = useStore((s) => s.runs);
   const info = useApp((s) => s.agentInfo.find((a) => a.agent === agent));
@@ -62,16 +72,28 @@ function AgentCard({ agent }: { agent: AgentId }) {
     .filter((s) => s.agent === agent && (s.running || latest.has(s.id)))
     .sort((a, b) => Number(b.running) - Number(a.running) || (latest.get(b.id)?.startedAt ?? b.updatedAt) - (latest.get(a.id)?.startedAt ?? a.updatedAt));
   const active = processes.filter((s) => s.running).length;
-  const visible = processes.filter((s, i) => s.running || i < Math.max(active, 4));
+  const endedAt = (s: SessionView) => {
+    const run = latest.get(s.id);
+    return run?.endedAt ?? run?.startedAt ?? 0;
+  };
+  const visible = processes.filter((s) => s.running || now - endedAt(s) < GROUP_AFTER);
+  const finished = processes.filter((s) => !s.running && now - endedAt(s) >= GROUP_AFTER && now - endedAt(s) < KEEP_FINISHED && endedAt(s) > clearedAt)
+    .sort((a, b) => endedAt(b) - endedAt(a)).slice(0, MAX_FINISHED);
   const offline = info && (!info.path || info.auth?.loggedIn === false);
   return (
     <div className={`act-card agent-${agent} ${active ? "running" : ""}`}>
       <div className="act-card-head">
         <AgentLogo agent={agent} size={16} /><b>{AGENT_NAMES[agent]}</b><span style={{ flex: 1 }} />
-        {offline ? <button className="status-chip warn" onClick={() => setApp({ loginAgent: agent })}>Sin sesión</button> : active ? <span className="status-chip running"><span className={`pulse small agent-${agent}`} />{active} trabajando</span> : <span className="status-chip muted">En espera</span>}
+        {offline ? <button className="status-chip warn" onClick={() => setApp({ loginAgent: agent })}>Sin sesión</button> : active ? <span className="status-chip running"><span className={`pulse small agent-${agent}`} />{active} procesando</span> : <span className="status-chip muted">En espera</span>}
       </div>
-      {visible.length ? <div className="act-processes">{visible.map((s) => <ProcessCard key={s.id} session={s} run={latest.get(s.id)} />)}</div> : <div className="muted small">Sin procesos recientes</div>}
-      {processes.length > visible.length && <span className="muted small">{processes.length - visible.length} más en Actividad</span>}
+      {visible.length > 0 && <div className="act-processes">{visible.map((s) => <ProcessCard key={s.id} session={s} run={latest.get(s.id)} />)}</div>}
+      {finished.length > 0 && <details className="act-finished">
+        <summary>
+          Terminados <span className="count">{finished.length}</span><span style={{ flex: 1 }} />
+          <button className="act-clear" onClick={(e) => { e.preventDefault(); clearFinished(); }} title="Quitar los terminados de aquí (siguen en Actividad)">Limpiar</button>
+        </summary>
+        <div className="act-processes">{finished.map((s) => <ProcessCard key={s.id} session={s} run={latest.get(s.id)} />)}</div>
+      </details>}
     </div>
   );
 }

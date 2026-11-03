@@ -2531,55 +2531,107 @@ button.sb-item:hover {
 .act-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 10px 10px;
+  gap: 6px;
+  padding: 0 8px 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .act-card {
   border: 1px solid var(--border);
-  border-radius: 11px;
-  padding: 10px 12px;
+  border-radius: 10px;
+  padding: 7px 9px;
   background: var(--bg-surface);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
+  flex-shrink: 0;
   transition: border-color 0.3s, box-shadow 0.3s;
 }
 .act-card.running.agent-claude {
   border-color: color-mix(in srgb, var(--claude) 45%, transparent);
-  box-shadow: 0 0 0 3px var(--claude-soft);
+  box-shadow: 0 0 0 2px var(--claude-soft);
 }
 .act-card.running.agent-codex {
   border-color: color-mix(in srgb, var(--codex) 45%, transparent);
-  box-shadow: 0 0 0 3px var(--codex-soft);
+  box-shadow: 0 0 0 2px var(--codex-soft);
 }
 .act-card-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  font-size: 12.5px;
+  min-width: 0;
 }
+.act-card-head b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-processes {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  max-height: 170px;
+  overflow-y: auto;
 }
+/* un proceso = una línea: estado, título, cola y tiempo */
 .act-process {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 8px;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  flex-shrink: 0;
+  padding: 0 7px;
   text-align: left;
+  font-size: 12px;
   color: var(--text-2);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
 }
-.act-process:hover { border-color: var(--border-strong); color: var(--text); }
-.act-process-top { display: flex; align-items: center; gap: 6px; width: 100%; }
-.act-process-title { flex: 1; min-width: 0; font-size: 12px; }
-.act-process-detail { display: flex; flex-wrap: wrap; gap: 8px; color: var(--text-3); font-size: 11px; }
-.act-process-detail > span { display: flex; align-items: center; gap: 4px; }
-.act-process .act-now { width: 100%; background: var(--bg-surface); }
+.act-process.running { background: var(--bg-panel); border-color: var(--border); color: var(--text); }
+.act-process:hover { background: var(--bg-panel); border-color: var(--border-strong); color: var(--text); }
+.act-process-title { flex: 1; min-width: 0; }
+.act-process-time { flex-shrink: 0; color: var(--text-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.act-process-queue {
+  flex-shrink: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--yellow-soft);
+  color: var(--yellow);
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.act-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
+.act-dot.ok { background: var(--green); }
+.act-dot.error { background: var(--red); }
+.act-dot.warn { background: var(--yellow); }
+.act-finished { border-top: 1px solid var(--border); padding-top: 3px; }
+.act-finished > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 11px;
+  height: 22px;
+  list-style: none;
+}
+.act-finished > summary::-webkit-details-marker { display: none; }
+.act-finished > summary::before { content: '▸'; font-size: 9px; transition: transform 0.15s; }
+.act-finished[open] > summary::before { transform: rotate(90deg); }
+.act-finished .act-process { color: var(--text-3); }
+.act-clear {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.act-clear:hover { color: var(--text); background: var(--bg-panel); }
 .act-session {
   text-align: left;
   border: 0;
