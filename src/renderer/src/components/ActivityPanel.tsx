@@ -1,9 +1,9 @@
 import { ReactNode, useEffect, useState } from "react";
-import type { AgentId, ChatItem, RunInfo } from "@shared/types";
+import type { AgentId, RunInfo } from "@shared/types";
 import { AGENT_NAMES, AGENTS } from "@shared/types";
 import { setApp, useApp } from "../lib/app-store";
-import { ActivityEntry, usePS, useStore } from "../lib/project-store";
-import { basename, durationText, timeAgo } from "../lib/utils";
+import { ActivityEntry, SessionView, usePS, useStore } from "../lib/project-store";
+import { durationText, timeAgo } from "../lib/utils";
 import { AgentLogo, Icon } from "./Icons";
 
 function useNow(active: boolean) {
@@ -24,152 +24,54 @@ const STATUS: Record<RunInfo["status"], { label: string; cls: string }> = {
   interrupted: { label: "Interrumpido", cls: "warn" },
 };
 
-function AgentCard({ agent }: { agent: AgentId }) {
+function ProcessCard({ session, run }: { session: SessionView; run?: RunInfo }) {
   const ps = usePS();
-  const run = useStore((s) => s.runs.find((r) => r.agent === agent));
-  const session = useStore((s) =>
-    run ? s.sessions[run.sessionId] : s.sessions[s.active[agent] ?? ""],
-  );
-  const last = useStore((s) =>
-    s.activity.find(
-      (a) =>
-        a.agent === agent &&
-        (a.kind === "tool" || a.kind === "files" || a.kind === "error"),
-    ),
-  );
-  const info = useApp((s) => s.agentInfo.find((a) => a.agent === agent));
-  // otras conversaciones de este agente que están trabajando a la vez (la tarjeta enseña la principal)
-  const otherKey = useStore((s) =>
-    Object.values(s.sessions)
-      .filter(
-        (x) =>
-          x.agent === agent &&
-          x.running &&
-          x.id !== (run ? run.sessionId : s.active[agent]),
-      )
-      .map((x) => x.id)
-      .join(","),
-  );
-  const others = useStore((s) => s.sessions);
-  const running = run?.status === "running";
+  const activity = useStore((s) => s.activity);
+  const queue = useStore((s) => s.queue);
+  const threads = useStore((s) => s.threads);
+  const orchs = useStore((s) => s.orchs);
+  const running = session.running;
   const now = useNow(running);
-
-  // ficheros tocados en el turno actual (o el último)
-  const files: string[] = [];
-  const items: ChatItem[] = session?.items ?? [];
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it.type === "user") break;
-    if (it.type === "files") files.push(...it.files.map((f) => f.path));
-  }
-
-  const st = run ? STATUS[run.status] : null;
-  const offline = info && (!info.path || info.auth?.loggedIn === false);
-
+  const last = activity.find((a) => a.sessionId === session.id && (a.kind === "tool" || a.kind === "files" || a.kind === "error") && (!run || a.at >= run.startedAt));
+  const threadId = session.threadId ?? (session.orchestrationId ? orchs[session.orchestrationId]?.threadId : undefined);
+  const waiting = queue.filter((q) => q.sessionId === session.id || (threadId && q.threadId === threadId)).length;
+  const st = running ? STATUS.running : run ? STATUS[run.status] : null;
+  const title = (threadId && threads[threadId]?.title) || session.title || run?.sessionTitle || "Conversación";
   return (
-    <div className={`act-card agent-${agent} ${running ? "running" : ""}`}>
+    <button className={`act-process ${running ? "running" : ""}`} onClick={() => ps.focusSession(session.id)} title="Ir a esta conversación">
+      <span className="act-process-top">
+        <span className="act-process-title ellipsis">{threadId || session.orchestrationId ? <span className="act-where">Ambos · </span> : null}{title}</span>
+        {st && <span className={`status-chip ${st.cls}`}>{running && <span className={`pulse small agent-${session.agent}`} />}{st.label}</span>}
+      </span>
+      <span className="act-process-detail">
+        {run && <span><Icon.clock size={11} /> {running ? durationText(now - run.startedAt) : `${durationText((run.endedAt ?? run.startedAt) - run.startedAt)} · ${timeAgo((run.endedAt ?? run.startedAt) / 1000)}`}</span>}
+        {waiting > 0 && <span>{waiting} en cola</span>}
+      </span>
+      {running && last && <span className="act-now mono small ellipsis" title={last.detail}>{last.status === "running" ? <Icon.spinner size={11} className="spin" /> : <Icon.check size={11} />} {last.text} {last.detail}</span>}
+    </button>
+  );
+}
+
+function AgentCard({ agent }: { agent: AgentId }) {
+  const sessions = useStore((s) => s.sessions);
+  const runs = useStore((s) => s.runs);
+  const info = useApp((s) => s.agentInfo.find((a) => a.agent === agent));
+  const latest = new Map<string, RunInfo>();
+  for (const run of runs) if (run.agent === agent && !latest.has(run.sessionId)) latest.set(run.sessionId, run);
+  const processes = Object.values(sessions)
+    .filter((s) => s.agent === agent && (s.running || latest.has(s.id)))
+    .sort((a, b) => Number(b.running) - Number(a.running) || (latest.get(b.id)?.startedAt ?? b.updatedAt) - (latest.get(a.id)?.startedAt ?? a.updatedAt));
+  const active = processes.filter((s) => s.running).length;
+  const visible = processes.filter((s, i) => s.running || i < Math.max(active, 4));
+  const offline = info && (!info.path || info.auth?.loggedIn === false);
+  return (
+    <div className={`act-card agent-${agent} ${active ? "running" : ""}`}>
       <div className="act-card-head">
-        <AgentLogo agent={agent} size={16} />
-        <b>{AGENT_NAMES[agent]}</b>
-        <span style={{ flex: 1 }} />
-        {offline ? (
-          <button
-            className="status-chip warn"
-            onClick={() => setApp({ loginAgent: agent })}
-          >
-            Sin sesión
-          </button>
-        ) : st ? (
-          <span className={`status-chip ${st.cls}`}>
-            {running && <span className={`pulse small agent-${agent}`} />}{" "}
-            {st.label}
-          </span>
-        ) : (
-          <span className="status-chip muted">En espera</span>
-        )}
+        <AgentLogo agent={agent} size={16} /><b>{AGENT_NAMES[agent]}</b><span style={{ flex: 1 }} />
+        {offline ? <button className="status-chip warn" onClick={() => setApp({ loginAgent: agent })}>Sin sesión</button> : active ? <span className="status-chip running"><span className={`pulse small agent-${agent}`} />{active} trabajando</span> : <span className="status-chip muted">En espera</span>}
       </div>
-      {session ? (
-        <button
-          className="act-session ellipsis"
-          onClick={() => ps.focusSession(session.id)}
-          title={
-            session.threadId || session.orchestrationId
-              ? "Ir a la conversación (en Ambos)"
-              : "Ir a la conversación"
-          }
-        >
-          {(session.threadId || session.orchestrationId) && (
-            <span className="act-where">Ambos · </span>
-          )}
-          {session.title}
-        </button>
-      ) : (
-        <div className="muted small">Sin conversaciones todavía</div>
-      )}
-      {otherKey && (
-        <div className="act-others">
-          {otherKey.split(",").map((id) => (
-            <button
-              key={id}
-              className="act-other ellipsis"
-              onClick={() => ps.focusSession(id)}
-              title="Ir a esta conversación"
-            >
-              <span className={`pulse small agent-${agent}`} />
-              {(others[id]?.threadId || others[id]?.orchestrationId) && (
-                <span className="act-where">Ambos · </span>
-              )}
-              {others[id]?.title ?? "Conversación"}
-            </button>
-          ))}
-        </div>
-      )}
-      {run && (
-        <div className="act-meta small muted">
-          <Icon.clock size={11} />{" "}
-          {running
-            ? durationText(now - run.startedAt)
-            : `${durationText((run.endedAt ?? run.startedAt) - run.startedAt)} · ${timeAgo((run.endedAt ?? run.startedAt) / 1000)}`}
-          {files.length > 0 && (
-            <>
-              {" "}
-              · <Icon.fileEdit size={11} /> {files.length}
-            </>
-          )}
-        </div>
-      )}
-      {running && last && (
-        <div className="act-now mono small ellipsis" title={last.detail}>
-          {last.status === "running" ? (
-            <Icon.spinner size={11} className="spin" />
-          ) : (
-            <Icon.check size={11} />
-          )}{" "}
-          {last.text} {last.detail}
-        </div>
-      )}
-      {files.length > 0 && (
-        <div className="act-files">
-          {files.slice(0, 5).map((f) => (
-            <button
-              key={f}
-              className="act-file ellipsis"
-              onClick={() =>
-                ps.openDiff(
-                  ps.repoFor(f),
-                  f.slice(ps.repoFor(f).length + 1),
-                  "head",
-                )
-              }
-            >
-              {basename(f)}
-            </button>
-          ))}
-          {files.length > 5 && (
-            <span className="muted small">+{files.length - 5}</span>
-          )}
-        </div>
-      )}
+      {visible.length ? <div className="act-processes">{visible.map((s) => <ProcessCard key={s.id} session={s} run={latest.get(s.id)} />)}</div> : <div className="muted small">Sin procesos recientes</div>}
+      {processes.length > visible.length && <span className="muted small">{processes.length - visible.length} más en Actividad</span>}
     </div>
   );
 }
@@ -268,6 +170,7 @@ function FoldTitle({
 
 // Panel «Agentes»: una tarjeta por agente con lo que está haciendo
 export function AgentsPanel() {
+  const enabled = useApp((s) => s.settings?.enabledAgents);
   const folded = useStore((s) => s.folded.includes("agents"));
   const busy = useStore(
     (s) => Object.values(s.sessions).filter((x) => x.running).length,
@@ -288,7 +191,7 @@ export function AgentsPanel() {
       </div>
       {!folded && (
         <div className="act-cards">
-          {AGENTS.map((a) => (
+          {AGENTS.filter((a) => !enabled || enabled.includes(a)).map((a) => (
             <AgentCard key={a} agent={a} />
           ))}
         </div>

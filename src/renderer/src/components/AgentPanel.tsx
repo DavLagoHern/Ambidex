@@ -360,7 +360,10 @@ const MODES: { id: 'claude' | 'codex' | 'ambos'; label: string; hint: string }[]
 
 export function AgentPanel() {
   const ps = usePS()
-  const view = useStore((s) => s.agentView)
+  const requestedView = useStore((s) => s.agentView)
+  const enabled = useApp((s) => s.settings?.enabledAgents)
+  const single = enabled?.length === 1 ? enabled[0] : undefined
+  const view = single ?? requestedView
   const compare = useStore((s) => s.compare)
   const busyKey = useStore((s) =>
     Object.values(s.sessions)
@@ -378,7 +381,7 @@ export function AgentPanel() {
     <div className="agent-panel">
       <div className="agent-tabs">
         <div className="modebar">
-          {MODES.map((m) => (
+          {MODES.filter((m) => !single || m.id === single).map((m) => (
             <button
               key={m.id}
               className={`mode-btn m-${m.id} ${mode === m.id ? 'on' : ''}`}

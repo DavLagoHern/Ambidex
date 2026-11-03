@@ -783,6 +783,9 @@ export function SettingsModal() {
               <p className="muted">
                 Ambidex ejecuta los CLI oficiales instalados en tu Mac con las cuentas en las que has iniciado sesión. No usa APIs ni claves.
               </p>
+              <Row label="Configurar agentes" hint="Instala, conecta o elige qué agentes aparecen en la aplicación.">
+                <button className="btn" onClick={() => setApp({ overlay: null, setupOpen: true })}>Abrir guía de configuración</button>
+              </Row>
               <AppUpdateRow settings={settings} set={set} />
               <Row
                 label="Instalar las versiones nuevas de los CLI"

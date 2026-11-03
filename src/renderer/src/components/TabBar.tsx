@@ -206,10 +206,11 @@ function AppUpdateButton() {
 
 function AgentStatus() {
   const infos = useApp((s) => s.agentInfo)
+  const enabled = useApp((s) => s.settings?.enabledAgents)
   const loading = useApp((s) => s.agentsLoading)
   return (
     <button className="tb-btn agents-status" onClick={() => setApp({ overlay: 'settings', settingsSection: 'agents' })} title="Estado de Claude Code y Codex">
-      {AGENTS.map((a) => {
+      {AGENTS.filter((a) => !enabled || enabled.includes(a)).map((a) => {
         const i = infos.find((x) => x.agent === a)
         const ok = !!i?.path && !!i.auth?.loggedIn
         return (

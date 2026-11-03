@@ -11,6 +11,7 @@ import { SettingsModal, TextDialog } from './components/Settings'
 import { TabBar } from './components/TabBar'
 import { Welcome } from './components/Welcome'
 import { Workspace } from './components/Workspace'
+import { SetupGuide } from './components/SetupGuide'
 
 // Carpetas soltadas sobre la ventana → se abren como proyecto
 function useFolderDrop() {
@@ -99,6 +100,7 @@ export default function App() {
       <GitOutput />
       <Picker />
       <TextDialog />
+      <SetupGuide />
       <LoginModal />
       <Lightbox />
       <Toasts />

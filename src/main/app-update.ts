@@ -96,13 +96,13 @@ export class AppUpdater {
       const upstream = await this.d.git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
       if (upstream.code !== 0) return this.set({ state: 'blocked', message: 'La rama del clon de Ambidex no sigue ninguna rama de GitHub' })
       const [ahead, behind] = (await this.git(['rev-list', '--left-right', '--count', 'HEAD...@{u}'], 'No se pudo comparar con GitHub')).split(/\s+/).map(Number)
-      const dirty = (await this.git(['status', '--porcelain', '--untracked-files=no'], 'No se pudo leer el clon')) !== ''
+      const dirty = (await this.git(['status', '--porcelain'], 'No se pudo leer el clon')) !== ''
       const head = await this.git(['rev-parse', 'HEAD'], 'No se pudo leer el clon')
       // nada que bajar; se recompila solo si el clon está limpio y va por delante de lo instalado (un pull a mano)
-      if (!behind && (!built || head === built || dirty)) return this.set({ state: 'current' })
+      if (!behind && (!built || head === built)) return this.set({ state: 'current' })
+      if (ahead) return this.set({ state: 'blocked', commits: behind, message: 'El clon tiene commits que no están en GitHub: actualízalo a mano (git pull)' })
+      if (dirty) return this.set({ state: 'blocked', commits: behind, message: `Hay cambios sin commitear en ${source}: no se actualiza para no pisarlos` })
       if (behind) {
-        if (dirty) return this.set({ state: 'blocked', commits: behind, message: `Hay cambios sin commitear en ${source}: no se actualiza para no pisarlos` })
-        if (ahead) return this.set({ state: 'blocked', commits: behind, message: 'El clon tiene commits que no están en GitHub: actualízalo a mano (git pull)' })
         this.set({ state: 'pulling', commits: behind })
         await this.git(['pull', '--ff-only', '--quiet'], 'No se pudo descargar la versión nueva')
       }

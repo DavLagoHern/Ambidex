@@ -125,4 +125,18 @@ describe('actualización de Ambidex (git pull + compilar)', () => {
     expect(r.state).toBe('error')
     expect(r.message).toBe('No se pudo compilar la versión nueva: npm ERR! algo falló')
   })
+
+  it('protege archivos nuevos y no instala commits locales como actualizaciones', async () => {
+    const s = setup()
+    commit(s.dev, 'src.ts', 'nuevo')
+    git(s.dev, 'push', '-q')
+    writeFileSync(join(s.source, 'nota-local.txt'), 'personal')
+    expect((await s.make().check()).state).toBe('blocked')
+    expect(s.npm).toHaveLength(0)
+
+    const local = setup()
+    commit(local.source, 'mio.txt', 'commit propio')
+    expect((await local.make().check()).state).toBe('blocked')
+    expect(local.npm).toHaveLength(0)
+  })
 })

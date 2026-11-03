@@ -21,6 +21,7 @@ export function Welcome() {
             <Icon.folderOpen size={15} /> Abrir carpeta
           </button>
           <span className="muted small">o arrastra una carpeta desde Finder</span>
+          <button className="btn ghost small" onClick={() => setApp({ setupOpen: true })}>Configurar agentes</button>
         </div>
 
         <div className="welcome-agents">

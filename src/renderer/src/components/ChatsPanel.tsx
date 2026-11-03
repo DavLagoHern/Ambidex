@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { AgentId, ChatItem, ExternalSession, SearchHit } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
 import { api } from '../lib/api'
-import { askText, attempt, confirmAsync, toast } from '../lib/app-store'
+import { askText, attempt, confirmAsync, toast, useApp } from '../lib/app-store'
 import { usePS, useStore } from '../lib/project-store'
 import { errMsg, fmtTokens, timeAgo } from '../lib/utils'
 import { ORCH_STATUS } from './chat/TeamCard'
@@ -135,6 +135,7 @@ type Entry =
 
 // Historial de conversaciones del proyecto: con los dos (Ambos) y con cada agente
 export function ChatsPanel() {
+  const enabled = useApp((s) => s.settings?.enabledAgents)
   const ps = usePS()
   const sessions = useStore((s) => s.sessions)
   const threads = useStore((s) => s.threads)
@@ -198,18 +199,18 @@ export function ChatsPanel() {
       <div className="panel-header">
         <span>Conversaciones</span>
         <span className="row-actions always">
-          <button className="icon-btn" title="Nueva con los dos" onClick={() => ps.newThread()}>
+          {(!enabled || enabled.length > 1) && <button className="icon-btn" title="Nueva con los dos" onClick={() => ps.newThread()}>
             <span className="duo-mini">
               <AgentLogo agent="claude" size={11} />
               <AgentLogo agent="codex" size={11} />
             </span>
-          </button>
-          <button className="icon-btn" title="Nueva con Claude" onClick={() => (ps.set({ agentView: 'claude' }), ps.newSession('claude'))}>
+          </button>}
+          {(!enabled || enabled.includes('claude')) && <button className="icon-btn" title="Nueva con Claude" onClick={() => (ps.set({ agentView: 'claude' }), ps.newSession('claude'))}>
             <AgentLogo agent="claude" size={13} />
-          </button>
-          <button className="icon-btn" title="Nueva con Codex" onClick={() => (ps.set({ agentView: 'codex' }), ps.newSession('codex'))}>
+          </button>}
+          {(!enabled || enabled.includes('codex')) && <button className="icon-btn" title="Nueva con Codex" onClick={() => (ps.set({ agentView: 'codex' }), ps.newSession('codex'))}>
             <AgentLogo agent="codex" size={13} />
-          </button>
+          </button>}
         </span>
       </div>
       <div className="panel-tools">
@@ -225,7 +226,7 @@ export function ChatsPanel() {
               ['claude', 'Claude'],
               ['codex', 'Codex']
             ] as const
-          ).map(([f, l]) => (
+          ).filter(([f]) => !enabled || f === 'all' || (f === 'both' ? enabled.length > 1 : enabled.includes(f))).map(([f, l]) => (
             <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
               {l}
             </button>

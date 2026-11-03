@@ -27,7 +27,9 @@ const sidebar = (view: SidebarView) => () => {
 const newChat = (agent?: AgentId) => () => {
   const s = ps()
   if (!s) return
-  const view = s.state.agentView
+  const enabled = getApp().settings?.enabledAgents
+  if (agent && enabled && !enabled.includes(agent)) return
+  const view = enabled?.length === 1 ? enabled[0] : s.state.agentView
   if (!agent && view === 'auto') {
     s.newThread().then(() => window.dispatchEvent(new CustomEvent('focus-composer', { detail: 'auto' })))
     return

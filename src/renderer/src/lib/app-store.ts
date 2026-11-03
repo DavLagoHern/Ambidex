@@ -42,6 +42,7 @@ export interface AppState {
   // imagen a pantalla completa (data URL)
   lightbox: string | null
   loginAgent: AgentId | null
+  setupOpen: boolean
   picker: { title: string; items: PickItem[]; resolve: (v: string | null) => void } | null
   dialog: { title: string; placeholder?: string; value?: string; resolve: (v: string | null) => void } | null
   // modelo local del enrutado
@@ -71,6 +72,7 @@ let state: AppState = {
   settingsSection: 'agents',
   lightbox: null,
   loginAgent: null,
+  setupOpen: false,
   jev: null,
   cliUpdates: {},
   appUpdate: null,
@@ -379,7 +381,7 @@ export async function initApp(runCommand: (cmd: string) => void) {
 
   const [settings, projects, limits] = await Promise.all([api.getSettings(), api.projects.list(), api.agentLimits()])
   const openIds = projects.filter((p) => p.isOpen).sort((a, b) => a.tabOrder - b.tabOrder).map((p) => p.id)
-  setApp({ settings, projects, limits, openIds, ready: true })
+  setApp({ settings, projects, limits, openIds, ready: true, setupOpen: !settings.setupComplete && projects.length === 0 })
   applyTheme()
   api.self
     .status()

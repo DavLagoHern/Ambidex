@@ -429,6 +429,9 @@ export interface FileContent {
 export type Theme = 'dark' | 'light' | 'system'
 
 export interface Settings {
+  // Ausente en instalaciones anteriores: conserva los dos agentes y evita repetir el asistente.
+  setupComplete?: boolean
+  enabledAgents?: AgentId[]
   claudePath?: string
   codexPath?: string
   claudeModel?: string
