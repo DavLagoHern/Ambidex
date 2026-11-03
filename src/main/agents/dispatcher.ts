@@ -281,19 +281,20 @@ export class Dispatcher {
   ): Promise<ThreadSendResult> {
     let thread = this.d.store.getThread(threadId)
     if (!thread) throw new Error('Conversación no encontrada')
-    // Atajo: si un agente del hilo ya está trabajando, el mensaje entra en su turno al momento, sin pasar por Jev.
+    // Con un agente del hilo trabajando, el mensaje va directo a la cola, sin pasar por Jev. Desde ahí decides:
+    // añadirlo al turno en curso, mandarlo al otro agente o dejarlo para que Jev lo reparta cuando quede libre.
     if (!opts.fromQueue) {
       const busy = (['claude', 'codex'] as AgentId[]).filter((a) => this.sessionOf(thread!, a)?.running)
       const mention = text.trim().match(/^@(claude|codex)\b/i)?.[1].toLowerCase() as AgentId | undefined
       const want = opts.agent ?? mention
-      const agent = want ? (busy.includes(want) ? want : undefined) : busy.length === 1 ? busy[0] : busy.length ? decideRoute(text, this.routeContext(thread)).agent : undefined
-      const target = agent && this.sessionOf(thread, agent)
-      if (agent && target && busy.includes(agent)) {
-        const prompt = mention ? text.replace(/^@(claude|codex)\b\s*/i, '') || text : text
-        if (await this.d.service.steer(target.id, prompt, opts.context, opts.images)) {
-          const decision: RouteDecision = { agent, reason: `Añadido al turno en curso de ${AGENT_NAMES[agent]}`, method: opts.agent ? 'manual' : mention ? 'mention' : 'rules' }
-          return { decision, sessionId: target.id, steered: true }
-        }
+      if (want ? busy.includes(want) : busy.length > 0) {
+        const agent = want ?? busy[0]
+        const queued = this.d.store.enqueue({ projectId: thread.projectId, threadId, prompt: text, context: opts.context, images: opts.images, agent: want })
+        this.pushQueue(thread.projectId)
+        // si terminó justo ahora, no se queda esperando
+        if (!busy.some((a) => this.d.service.isRunning(this.sessionOf(thread!, a)!.id))) void this.onIdle(this.sessionOf(thread, busy[0])!)
+        const decision: RouteDecision = { agent, reason: `En cola mientras ${AGENT_NAMES[busy[0]]} trabaja`, method: opts.agent ? 'manual' : mention ? 'mention' : 'rules' }
+        return { queued, decision }
       }
     }
     const decision = await this.decide(thread, text, opts.agent, { models: opts.models, efforts: opts.efforts })
@@ -360,10 +361,29 @@ export class Dispatcher {
   }
 
   // «Enviar ya» añade al turno activo o inicia el siguiente si ya está libre. Nunca lo cancela.
-  async sendNow(id: string): Promise<'sent'> {
+  async sendNow(id: string, to: 'current' | 'other' = 'current'): Promise<'sent'> {
     const q = this.d.store.getQueued(id)
     if (!q) throw new Error('Ese mensaje ya no está en la cola')
     let busy: string | undefined
+    const thread = q.threadId ? this.d.store.getThread(q.threadId) : undefined
+    if (thread) {
+      const running = (['claude', 'codex'] as AgentId[]).filter((a) => this.sessionOf(thread, a)?.running)
+      const current = q.agent && running.includes(q.agent) ? q.agent : running[0]
+      const agent = to === 'other' ? (current ?? q.agent) === 'claude' ? 'codex' : 'claude' : current
+      if (agent) {
+        if (to === 'other' && !this.routeContext(thread).available[agent]) throw new Error(`${AGENT_NAMES[agent]} no está disponible`)
+        const s = this.sessionOf(thread, agent)
+        const prompt = q.prompt.replace(/^@(claude|codex)\b\s*/i, '') || q.prompt
+        const ok = s?.running
+          ? await this.d.service.steer(s.id, prompt, q.context, q.images)
+          : !!(await this.sendThread(thread.id, prompt, { agent, context: q.context, images: q.images, fromQueue: true })).sessionId
+        // si el turno justo termina, el mensaje sigue en la cola y sale solo a continuación, sin avisos
+        if (!ok) return 'sent'
+        this.d.store.removeQueued(id)
+        this.pushQueue(q.projectId)
+        return 'sent'
+      }
+    }
     if (q.threadId) {
       const r = await this.sendThread(q.threadId, q.prompt, { agent: q.agent, context: q.context, images: q.images, fromQueue: true })
       if (r.sessionId) {
@@ -389,7 +409,7 @@ export class Dispatcher {
       this.pushQueue(q.projectId)
       return 'sent'
     }
-    throw new Error('El turno ya está terminando: el mensaje sigue en cola y se enviará a continuación')
+    return 'sent'
   }
 
   // Una conversación ha quedado libre: siguiente mensaje de su cola

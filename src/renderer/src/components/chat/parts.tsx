@@ -802,13 +802,26 @@ export function QueueList({ items }: { items: QueuedMessage[] }) {
   const ps = usePS()
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const threads = useStore((s) => s.threads)
+  const sessions = useStore((s) => s.sessions)
   if (!items.length) return null
+  // quién trabaja en la conversación del mensaje: «al turno actual» va a ese y «al otro» al contrario
+  const roles = (q: QueuedMessage) => {
+    const t = q.threadId ? threads[q.threadId] : undefined
+    if (!t) return undefined
+    const busy = (['claude', 'codex'] as AgentId[]).filter((a) => t.sessions[a] && sessions[t.sessions[a]!]?.running)
+    const current = q.agent && busy.includes(q.agent) ? q.agent : busy[0]
+    if (!current) return undefined
+    return { current, other: (current === 'claude' ? 'codex' : 'claude') as AgentId }
+  }
   return (
     <div className="queue">
       <div className="queue-head">
-        <Icon.clock size={12} /> En cola · {items.length} <span className="muted">se enviarán en orden cuando el agente quede libre</span>
+        <Icon.clock size={12} /> En cola · {items.length} <span className="muted">si no eliges, Jev lo reparte cuando quede libre</span>
       </div>
-      {items.map((q, i) => (
+      {items.map((q, i) => {
+        const r = roles(q)
+        return (
         <div key={q.id} className="queue-item">
           <span className="queue-n">{i + 1}</span>
           {q.agent && <AgentLogo agent={q.agent} size={12} />}
@@ -829,14 +842,20 @@ export function QueueList({ items }: { items: QueuedMessage[] }) {
               {q.prompt}
             </span>
           )}
-          <button className="icon-btn" title="Añadir al turno actual sin detenerlo" onClick={() => ps.sendQueuedNow(q.id)}>
+          <button className="icon-btn" title={r ? `Añadir al turno de ${AGENT_NAMES[r.current]} sin detenerlo` : 'Enviar ya'} onClick={() => ps.sendQueuedNow(q.id)}>
             <Icon.send size={12} />
           </button>
+          {r && (
+            <button className="icon-btn" title={`Mandárselo a ${AGENT_NAMES[r.other]}`} onClick={() => ps.sendQueuedNow(q.id, 'other')}>
+              <AgentLogo agent={r.other} size={12} />
+            </button>
+          )}
           <button className="icon-btn" title="Quitar de la cola" onClick={() => ps.removeQueued(q.id)}>
             <Icon.x size={12} />
           </button>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

@@ -620,7 +620,7 @@ function handlers(): Handlers {
     'queue:add': (m) => dispatcher.enqueue(m),
     'queue:remove': (id) => dispatcher.remove(id),
     'queue:update': (id, prompt) => dispatcher.update(id, prompt),
-    'queue:sendNow': (id) => dispatcher.sendNow(id),
+    'queue:sendNow': (id, to) => dispatcher.sendNow(id, to),
 
     'orch:list': (projectId) => orchestrator.list(projectId),
     'orch:get': (id) => orchestrator.get(id),

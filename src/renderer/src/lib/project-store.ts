@@ -836,7 +836,11 @@ export class ProjectStore {
     const drop = () => {
       if (!failed) this.set((s) => ({ pending: s.pending.filter((x) => x.id !== p.id) }))
     }
-    this.set((s) => ({ pending: [...s.pending, p] }))
+    // con el agente trabajando va directo a la cola (aparece allí al momento): sin línea provisional
+    const sessions = id ? this.state.threads[id]?.sessions : undefined
+    const running = (a: AgentId) => !!(sessions?.[a] && this.state.sessions[sessions[a]!]?.running)
+    const busy = target === 'auto' ? running('claude') || running('codex') : running(target)
+    if (!busy) this.set((s) => ({ pending: [...s.pending, p] }))
     try {
       id ??= (await this.newThread()) ?? null
       if (!id) return undefined
@@ -845,7 +849,6 @@ export class ProjectStore {
       this.set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, threadId: tid } : x)) }))
       const context = this.contextBlock() || undefined
       const r = await api.threads.send(id, text, { agent: target === 'auto' ? undefined : target, context, images, models, efforts })
-      if (r.queued) toast('El agente está ocupado: tu mensaje queda en la cola', 'info')
       return r.decision
     } catch (e) {
       failed = true
@@ -866,10 +869,11 @@ export class ProjectStore {
   removeQueued = (id: string) => attempt(() => api.queue.remove(id))
   updateQueued = (id: string, prompt: string) => attempt(() => api.queue.update(id, prompt))
   // «Enviar ya»: añade información al turno activo sin detenerlo.
-  sendQueuedNow = async (id: string) => {
+  // «Al otro agente»: lo atiende el que no está trabajando (o se le añade a su turno si también trabaja).
+  sendQueuedNow = async (id: string, to: 'current' | 'other' = 'current') => {
     const q = this.state.queue.find((x) => x.id === id)
     if (!q) return
-    await attempt(() => api.queue.sendNow(id))
+    await attempt(() => api.queue.sendNow(id, to))
   }
 
   setQueue(items: QueuedMessage[]) {

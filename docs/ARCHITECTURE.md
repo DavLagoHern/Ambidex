@@ -214,6 +214,8 @@ detiene tras 10 minutos sin uso (≈1 GB de memoria) y al salir de la app; si qu
 inesperado, se detiene al volver a abrir. `Dispatcher` (proceso principal) crea
 una sesión por agente dentro de cada hilo y, al cambiar de agente, le pasa lo hablado con el otro. La cola
 de mensajes vive en SQLite y se procesa cuando la conversación queda libre.
+Si un agente del hilo trabaja, `sendThread` encola sin consultar a Jev; `sendNow(id, 'current' | 'other')` lo añade al
+turno en curso o lo lanza en el otro agente, y lo que se deja en la cola lo reparte Jev en `onIdle`.
 Claude Code se lanza con `--input-format stream-json` y la entrada abierta: un mensaje enviado mientras trabaja
 se escribe en su stdin (`SessionService.steer`) y lo incorpora en el siguiente paso del mismo turno; al llegar el
 `result` se cierra la entrada; los mensajes ya escritos se consumen antes de salir.

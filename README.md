@@ -33,7 +33,7 @@ Ambidex is a macOS desktop app for building software with **Claude Code** and **
 - **Also included:**
   - a Monaco editor and terminals;
   - Git: multi-repo, staging, branches, conflicts, cherry-pick and revert, pull requests via `gh`;
-  - messages sent while Claude Code works join its current turn without stopping it (Codex queues them in an editable queue); **+** / ⌘↵ launches the message as a separate task, and `/prompts`;
+  - messages sent while an agent works go straight to an editable queue; from there you add them to the current turn (without stopping it), hand them to the other agent, or leave them for Jev to route when it's free; **+** / ⌘↵ launches the message as a separate task, and `/prompts`;
   - the state of every project, restored when you reopen it.
 
 ## Install from source

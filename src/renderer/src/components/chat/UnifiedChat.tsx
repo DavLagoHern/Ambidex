@@ -104,13 +104,20 @@ function TurnView({ t }: { t: Turn }) {
 }
 
 // Mensaje recién enviado: se ve ya, mientras el motor decide a quién va (antes de que exista el turno real)
+// Mismo aspecto que el mensaje ya enviado: cuando llega el real ocupa su sitio sin saltos ni textos provisionales.
 function PendingTurn({ p }: { p: PendingSend }) {
+  const target = useStore((s) => s.target)
   return (
-    <div className="send-preview" title={p.text} role="status">
-      {p.error ? <Icon.fail size={12} /> : <span className="pulse" />}
-      <span className="ellipsis">{p.text}</span>
-      <small title={p.error}>{p.error ? 'No confirmado' : 'Enviando…'}</small>
-      {p.error && <CopyButton text={p.text} className="icon-btn" title="Copiar el mensaje para recuperarlo" />}
+    <div className="turn">
+      <div className="msg-user-wrap">
+        <div className="msg-user" style={p.error ? undefined : { opacity: 0.92 }}>{p.text}</div>
+        {!p.error && <div className="row gap msg-user-meta"><span className="route-chip">{target === 'auto' ? 'Jev está pensando…' : 'Preparando…'}</span></div>}
+        {p.error && (
+          <span className="route-chip" title={p.error}>
+            <Icon.fail size={11} /> No confirmado <CopyButton text={p.text} className="icon-btn" title="Copiar el mensaje para recuperarlo" />
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -225,10 +232,9 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
     claudeSession && codexSession ? (claudeSession.updatedAt >= codexSession.updatedAt ? 'claude' : 'codex') : claudeSession ? 'claude' : codexSession ? 'codex' : defaultAgent
   const agent: AgentId | null = target === 'claude' || target === 'codex' ? target : target === 'auto' ? lastAgent : null
   const session = agent === 'claude' ? claudeSession : agent === 'codex' ? codexSession : undefined
-  // en Auto el mensaje solo espera en cola si los dos están ocupados (si no, va al libre)
-  const busy = target === 'auto' ? !!(claudeSession?.running && codexSession?.running) : !!session?.running
-  // Los dos agentes reciben información durante su turno.
-  const steer = busy
+  // con un agente trabajando, el mensaje va a la cola y desde allí eliges a quién va (o lo reparte Jev)
+  const busy = target === 'auto' ? !!(claudeSession?.running || codexSession?.running) : !!session?.running
+  const worker: AgentId | undefined = target === 'auto' ? (claudeSession?.running ? 'claude' : codexSession?.running ? 'codex' : undefined) : agent ?? undefined
   const send = (separate = false) => {
     const msg = messageText(text, att.paths)
     if (!msg) return
@@ -254,9 +260,7 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
             target === 'team'
               ? 'Describe la tarea para el equipo: qué quieres conseguir, alcance y criterios…'
               : busy
-                ? steer
-                  ? `${AGENT_NAMES.claude} está trabajando: lo que escribas se le añade a lo que está haciendo`
-                  : `${agent ? AGENT_NAMES[agent] : 'El agente'} está trabajando: tu mensaje quedará en cola`
+                ? `${worker ? AGENT_NAMES[worker] : 'El agente'} está trabajando: tu mensaje irá a la cola y desde allí eliges a quién va`
                 : 'Escribe a Claude y Codex…  @ ficheros o agentes · / tus prompts'
           }
           onChange={(e) => (setText(e.target.value), mentions.trackCaret())}
@@ -334,9 +338,9 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
             className={`send-btn ${target === 'team' ? 'both' : agent ? `agent-${agent}` : 'both'}`}
             disabled={!text.trim() && !att.count}
             onClick={() => send()}
-            title={target === 'team' ? 'Encargar al equipo (↵)' : steer ? 'Añadir a lo que está haciendo, sin pararlo (↵)' : busy ? 'Añadir información al turno actual (↵)' : 'Enviar (↵)'}
+            title={target === 'team' ? 'Encargar al equipo (↵)' : busy ? 'Poner en cola (↵)' : 'Enviar (↵)'}
           >
-            {busy && !steer ? <Icon.clock size={14} /> : <Icon.up size={15} />}
+            {busy && target !== 'team' ? <Icon.clock size={14} /> : <Icon.up size={15} />}
           </button>
         </div>
       </div>
@@ -472,10 +476,10 @@ export function UnifiedChat() {
         >
           <div className="chat-inner">
             {timeline.map((e) => (e.kind === 'turn' ? <TurnView key={e.key} t={e} /> : <TeamEntryView key={e.key} o={e.o} />))}
+            {pending.map((p) => <PendingTurn key={p.id} p={p} />)}
           </div>
         </div>
       )}
-      {pending.map((p) => <PendingTurn key={p.id} p={p} />)}
       <QueueList items={myQueue} />
       <UnifiedComposer threadId={threadId} />
     </div>

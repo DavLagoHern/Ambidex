@@ -214,9 +214,9 @@ describe('cola: «Enviar ya»', () => {
     const b = await dispatcher.sendThread(t.id, 'en cola 2', { agent: 'claude' })
     expect(a.queued && b.queued).toBeTruthy()
     // sin permiso para interrumpir: no se toca nada y la cola sigue igual
-    await expect(dispatcher.sendNow(b.queued!.id)).rejects.toThrow(/sigue en cola/)
+    await dispatcher.sendNow(b.queued!.id)
     expect(store.nextQueued({ threadId: t.id })?.prompt).toBe('en cola 1')
-    await expect(dispatcher.sendNow(b.queued!.id)).rejects.toThrow(/sigue en cola/)
+    await dispatcher.sendNow(b.queued!.id)
     expect(cancelled).toEqual([])
     expect(store.nextQueued({ threadId: t.id })?.prompt).toBe('en cola 1')
     expect(store.listQueue(project.id)).toHaveLength(2)
@@ -243,59 +243,61 @@ describe('razonamiento automático', () => {
 })
 
 describe('mensajes a mitad de turno', () => {
-  it.each(['claude', 'codex'] as const)('con %s trabajando, añade información al turno sin cola ni cancelación', async (agent) => {
+  function setup(jevCalls?: { n: number }) {
     const store = memoryStore()
     const project = store.openProject(tmpDir(), 'demo', null)
+    if (jevCalls) store.saveSettings({ routerMode: 'jev' })
     const running = new Set<string>()
-    const steered: string[] = []
+    const steered: { id: string; text: string }[] = []
     const cancelled: string[] = []
+    const sent: string[] = []
     const service = {
       getSession: (id: string) => {
         const s = store.getSession(id)
         return s && { ...s, running: running.has(id) }
       },
-      send: (sessionId: string) => (running.add(sessionId), { runId: 'r', done: new Promise(() => {}) }),
+      send: (sessionId: string, prompt: string) => (running.add(sessionId), sent.push(prompt), { runId: 'r', done: new Promise(() => {}) }),
       isRunning: (id: string) => running.has(id),
-      steer: (_id: string, text: string) => (steered.push(text), true),
+      steer: (id: string, text: string) => (steered.push({ id, text }), true),
       cancel: async (id: string) => void cancelled.push(id)
     }
-    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, models: (a) => CATALOG[a] })
-    const t = dispatcher.createThread(project.id)
-    await dispatcher.sendThread(t.id, 'primero', { agent })
-    const r = await dispatcher.sendThread(t.id, 'y además esto', { agent })
-    expect(r.steered).toBe(true)
-    expect(r.queued).toBeUndefined()
-    expect(steered).toEqual(['y además esto'])
-    expect(cancelled).toEqual([])
-    expect(store.listQueue(project.id)).toHaveLength(0)
+    const jev = jevCalls && { classify: async () => (jevCalls.n++, { via: 'jev' as const, followUp: false, confidence: 0.9, category: 'plan', tier: 'easy' }) as never }
+    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, jev, models: (a) => CATALOG[a] })
+    return { store, project, dispatcher, steered, cancelled, sent, t: dispatcher.createThread(project.id) }
+  }
+
+  it.each(['claude', 'codex'] as const)('con %s trabajando, va a la cola y «al turno actual» lo añade sin cancelar', async (agent) => {
+    const s = setup()
+    const r1 = await s.dispatcher.sendThread(s.t.id, 'primero', { agent })
+    const r = await s.dispatcher.sendThread(s.t.id, 'y además esto', { agent })
+    expect(r.queued).toBeDefined()
+    expect(s.steered).toEqual([])
+    expect(await s.dispatcher.sendNow(r.queued!.id)).toBe('sent')
+    expect(s.steered).toEqual([{ id: r1.sessionId, text: 'y además esto' }])
+    expect(s.cancelled).toEqual([])
+    expect(s.store.listQueue(s.project.id)).toHaveLength(0)
   })
 
-  it('con un agente trabajando, el mensaje entra al momento sin consultar a Jev', async () => {
-    const store = memoryStore()
-    const project = store.openProject(tmpDir(), 'demo', null)
-    store.saveSettings({ routerMode: 'jev' })
-    const running = new Set<string>()
-    const steered: string[] = []
-    let asked = 0
-    const service = {
-      getSession: (id: string) => {
-        const s = store.getSession(id)
-        return s && { ...s, running: running.has(id) }
-      },
-      send: (sessionId: string) => (running.add(sessionId), { runId: 'r', done: new Promise(() => {}) }),
-      isRunning: (id: string) => running.has(id),
-      steer: (_id: string, text: string) => (steered.push(text), true),
-      cancel: async () => {}
-    }
-    const jev = { classify: async () => (asked++, { via: 'jev' as const, followUp: false, confidence: 0.9, category: 'plan', tier: 'easy' }) as never }
-    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, jev, models: (a) => CATALOG[a] })
-    const t = dispatcher.createThread(project.id)
-    await dispatcher.sendThread(t.id, 'primero')
-    const before = asked
-    const r = await dispatcher.sendThread(t.id, 'y además esto')
-    expect(r.steered).toBe(true)
-    expect(asked).toBe(before)
-    expect(steered).toEqual(['y además esto'])
+  it('con un agente trabajando, va a la cola al momento sin consultar a Jev', async () => {
+    const calls = { n: 0 }
+    const s = setup(calls)
+    await s.dispatcher.sendThread(s.t.id, 'primero')
+    const before = calls.n
+    const r = await s.dispatcher.sendThread(s.t.id, 'y además esto')
+    expect(r.queued).toBeDefined()
+    expect(calls.n).toBe(before)
+  })
+
+  it('«al otro agente» lo lanza en el agente libre', async () => {
+    const s = setup()
+    await s.dispatcher.sendThread(s.t.id, 'primero', { agent: 'claude' })
+    const r = await s.dispatcher.sendThread(s.t.id, 'revisa los tests')
+    expect(await s.dispatcher.sendNow(r.queued!.id, 'other')).toBe('sent')
+    // Claude solo recibe el aviso de que Codex trabaja en paralelo, no el mensaje
+    expect(s.steered.map((x) => x.text)).not.toContain('revisa los tests')
+    expect(s.store.getThread(s.t.id)!.sessions.codex).toBeDefined()
+    expect(s.sent.at(-1)).toBe('revisa los tests')
+    expect(s.store.listQueue(s.project.id)).toHaveLength(0)
   })
 })
 

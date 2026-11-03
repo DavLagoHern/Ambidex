@@ -141,7 +141,7 @@ export interface IpcContract {
   'queue:remove': (id: string) => void
   'queue:update': (id: string, prompt: string) => void
   // añade al turno en curso sin cancelarlo
-  'queue:sendNow': (id: string) => 'sent'
+  'queue:sendNow': (id: string, to?: 'current' | 'other') => 'sent'
 
   'orch:list': (projectId: string) => Orchestration[]
   'orch:get': (id: string) => Orchestration | undefined

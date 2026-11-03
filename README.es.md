@@ -50,7 +50,7 @@ Siempre a mano: **modelo**, **razonamiento** y **permisos**. En «Auto» se ven 
 
 **Sin límites** (Claude) y **Acceso total** (Codex) están siempre en el selector de permisos y se marcan en amarillo cuando están elegidos.
 
-**Mientras trabaja:** tanto Claude Code como Codex reciben lo que escribas dentro del turno actual, sin pararlo. El mensaje aparece inmediatamente en una vista previa mientras se entrega. Si el turno ya está cerrándose, se conserva en la **cola**, que puedes editar, quitar o enviar ya y sobrevive a reinicios. En Ambos, si trabajan simultáneamente, cada uno recibe la tarea y el resultado del otro para coordinarse. Con el botón **+** (o ⌘↵) el mensaje sale como tarea aparte, en una conversación nueva.
+**Mientras trabaja:** lo que escribas va directo a la **cola**, sin esperar a Jev. Desde ahí eliges: añadirlo al turno en curso (Claude Code y Codex lo reciben sin pararse), mandárselo al otro agente o dejarlo, y Jev lo reparte cuando quede libre. La cola se puede editar y sobrevive a reinicios. En Ambos, si trabajan simultáneamente, cada uno recibe la tarea y el resultado del otro para coordinarse. Con el botón **+** (o ⌘↵) el mensaje sale como tarea aparte, en una conversación nueva.
 
 En el cuadro de texto:
 

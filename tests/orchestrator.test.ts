@@ -191,9 +191,10 @@ describe('chat único con enrutado', () => {
     // Codex recibe lo que se habló con Claude
     expect(codexFirst.context).toContain('Planifica la estructura')
     expect(codexFirst.route?.agent).toBe('codex')
-    // mientras Codex trabaja, la información adicional entra en su mismo turno
+    // mientras Codex trabaja, el mensaje va a la cola; «al turno actual» lo añade a lo que está haciendo
     const r3 = await s.dispatcher.sendThread(t.id, '@codex y añade un test')
-    expect(r3.steered).toBe(true)
+    expect(r3.queued).toBeDefined()
+    expect(await s.dispatcher.sendNow(r3.queued!.id)).toBe('sent')
     await waitFor(() => s.store.listQueue(s.project.id).length === 0, 10000)
     await waitFor(() => s.store.messages(r2.sessionId!).filter((i) => i.type === 'user').length === 2, 10000)
     expect(s.store.getThread(t.id)!.title).toBe('Planifica la estructura del módulo de pagos')
