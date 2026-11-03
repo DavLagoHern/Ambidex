@@ -281,6 +281,21 @@ export class Dispatcher {
   ): Promise<ThreadSendResult> {
     let thread = this.d.store.getThread(threadId)
     if (!thread) throw new Error('Conversación no encontrada')
+    // Atajo: si un agente del hilo ya está trabajando, el mensaje entra en su turno al momento, sin pasar por Jev.
+    if (!opts.fromQueue) {
+      const busy = (['claude', 'codex'] as AgentId[]).filter((a) => this.sessionOf(thread!, a)?.running)
+      const mention = text.trim().match(/^@(claude|codex)\b/i)?.[1].toLowerCase() as AgentId | undefined
+      const want = opts.agent ?? mention
+      const agent = want ? (busy.includes(want) ? want : undefined) : busy.length === 1 ? busy[0] : busy.length ? decideRoute(text, this.routeContext(thread)).agent : undefined
+      const target = agent && this.sessionOf(thread, agent)
+      if (agent && target && busy.includes(agent)) {
+        const prompt = mention ? text.replace(/^@(claude|codex)\b\s*/i, '') || text : text
+        if (await this.d.service.steer(target.id, prompt, opts.context, opts.images)) {
+          const decision: RouteDecision = { agent, reason: `Añadido al turno en curso de ${AGENT_NAMES[agent]}`, method: opts.agent ? 'manual' : mention ? 'mention' : 'rules' }
+          return { decision, sessionId: target.id, steered: true }
+        }
+      }
+    }
     const decision = await this.decide(thread, text, opts.agent, { models: opts.models, efforts: opts.efforts })
     thread = this.d.store.getThread(threadId) ?? thread
     const target = this.sessionOf(thread, decision.agent)

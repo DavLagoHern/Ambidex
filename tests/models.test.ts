@@ -269,6 +269,34 @@ describe('mensajes a mitad de turno', () => {
     expect(cancelled).toEqual([])
     expect(store.listQueue(project.id)).toHaveLength(0)
   })
+
+  it('con un agente trabajando, el mensaje entra al momento sin consultar a Jev', async () => {
+    const store = memoryStore()
+    const project = store.openProject(tmpDir(), 'demo', null)
+    store.saveSettings({ routerMode: 'jev' })
+    const running = new Set<string>()
+    const steered: string[] = []
+    let asked = 0
+    const service = {
+      getSession: (id: string) => {
+        const s = store.getSession(id)
+        return s && { ...s, running: running.has(id) }
+      },
+      send: (sessionId: string) => (running.add(sessionId), { runId: 'r', done: new Promise(() => {}) }),
+      isRunning: (id: string) => running.has(id),
+      steer: (_id: string, text: string) => (steered.push(text), true),
+      cancel: async () => {}
+    }
+    const jev = { classify: async () => (asked++, { via: 'jev' as const, followUp: false, confidence: 0.9, category: 'plan', tier: 'easy' }) as never }
+    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, jev, models: (a) => CATALOG[a] })
+    const t = dispatcher.createThread(project.id)
+    await dispatcher.sendThread(t.id, 'primero')
+    const before = asked
+    const r = await dispatcher.sendThread(t.id, 'y además esto')
+    expect(r.steered).toBe(true)
+    expect(asked).toBe(before)
+    expect(steered).toEqual(['y además esto'])
+  })
 })
 
 it('en Ambos los agentes simultáneos reciben su tarea mutua y el resultado al finalizar', async () => {

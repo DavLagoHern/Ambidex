@@ -18,7 +18,7 @@ export async function oneShot(o: {
   const args =
     o.agent === 'claude'
       ? ['--output-format', 'text', '--permission-mode', 'plan', '--tools', '', '--no-session-persistence', ...model, '-p', o.prompt]
-      : ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '-c', 'sandbox_mode="read-only"', ...model, o.prompt]
+      : ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '-c', 'sandbox_mode="read-only"', '-c', 'model_reasoning_effort="low"', ...model, o.prompt]
 
   let out = ''
   let lastMsg = ''
@@ -39,7 +39,7 @@ export async function oneShot(o: {
       }
     }
   )
-  const timer = setTimeout(() => proc.cancel(), 180000)
+  const timer = setTimeout(() => proc.cancel(), 60000)
   const exit = await proc.done
   clearTimeout(timer)
   const result = (o.agent === 'codex' ? lastMsg : out).trim()

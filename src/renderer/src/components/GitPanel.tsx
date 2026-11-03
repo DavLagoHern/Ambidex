@@ -409,7 +409,7 @@ export function GitPanel() {
       const untracked = ps.state.git?.files.filter((f) => f.untracked).map((f) => f.path) ?? []
       if (!diff.trim() && !untracked.length) throw new Error('No hay cambios')
       const recent = (await api.git.log(repo, 8, 0, false)).map((c) => `- ${c.subject}`).join('\n')
-      const input = `Commits recientes:\n${recent || '(ninguno)'}\n\n${untracked.length ? `Ficheros nuevos sin seguimiento: ${untracked.join(', ')}\n\n` : ''}${diff.slice(0, 60000)}`
+      const input = `Commits recientes:\n${recent || '(ninguno)'}\n\n${untracked.length ? `Ficheros nuevos sin seguimiento: ${untracked.join(', ')}\n\n` : ''}${diff.slice(0, 24000)}`
       const model = agent === 'claude' ? settings?.claudeModel : settings?.codexModel
       const msg = await api.oneShot(agent, repo, COMMIT_PROMPT, input, model || undefined)
       setMessage(msg.replace(/^```\w*\n?|```$/g, '').trim())

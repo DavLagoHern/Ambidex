@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { basename, join } from 'path'
 import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentId, AgentInfo, AgentLimits, NativeMenuItem, Settings } from '@shared/types'
-import { AGENT_NAMES } from '@shared/types'
+import { AGENT_NAMES, DEFAULT_MODEL_POLICY } from '@shared/types'
 import { openDatabase, type DB } from './db/database'
 import { Store } from './db/store'
 import { claudeAdapter } from './agents/claude'
@@ -18,7 +18,7 @@ import { SessionService } from './agents/service'
 import { Dispatcher } from './agents/dispatcher'
 import { claudeChannel, CliUpdater } from './agents/updates'
 import { AppUpdater, type Exec } from './app-update'
-import { difficultyCriteria, routeCategories } from '@shared/router'
+import { difficultyCriteria, pickModel, routeCategories } from '@shared/router'
 import { Orchestrator } from './orchestrator/engine'
 import * as files from './files'
 import * as gitApi from './git'
@@ -650,8 +650,9 @@ function handlers(): Handlers {
     'agents:oneShot': (agent, cwd, prompt, stdin, model) => {
       const bin = resolveBin(agent, settings())
       if (!bin) throw new Error(`No se encontró el CLI de ${AGENT_NAMES[agent]}`)
-      const fallback = agent === 'codex' ? codexDefault() : undefined
-      return oneShot({ agent, bin, cwd: guard.check(cwd), prompt, stdin, model: model || fallback, env: childEnv() })
+      // tareas cortas (mensaje de commit…): siempre el modelo más rápido y barato, nunca el que uses para programar
+      const fast = agent === 'claude' ? 'haiku' : pickModel('codex', 'easy', settings().modelPolicy ?? DEFAULT_MODEL_POLICY, agentInfo.find((a) => a.agent === 'codex')?.models?.map((m) => m.id))?.model
+      return oneShot({ agent, bin, cwd: guard.check(cwd), prompt, stdin, model: fast || model || (agent === 'codex' ? codexDefault() : undefined), env: childEnv() })
     },
     'cli:updates': () => updater.status(),
     'cli:check': () => updater.check(settings().autoUpdateClis !== false),

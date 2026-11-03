@@ -144,17 +144,32 @@ function FileEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' }>; vis
   )
 }
 
+// La vista inicial se adapta al panel, pero respeta la elección manual.
+function useDiffLayout() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  const [choice, setChoice] = useState<boolean | null>(null)
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  return { ref, inline: choice ?? width < 760, setInline: setChoice }
+}
+
 // Diff entre dos refs (p. ej. la propuesta del equipo frente a la base)
 function RefDiffView({ tab }: { tab: Extract<Tab, { kind: 'refdiff' }> }) {
   const [sides, setSides] = useState<{ a: string; b: string } | null>(null)
-  const [inline, setInline] = useState(false)
+  const { ref, inline, setInline } = useDiffLayout()
   useEffect(() => {
     Promise.all([api.git.show(tab.cwd, tab.from, tab.rel), api.git.show(tab.cwd, tab.to, tab.rel)])
       .then(([a, b]) => setSides({ a, b }))
       .catch(() => setSides({ a: '', b: '' }))
   }, [tab.id])
   return (
-    <div className="diff-wrap">
+    <div className="diff-wrap" ref={ref}>
       <div className="diff-bar">
         <span className="mono small">{tab.rel}</span>
         <span className="badge accent">{tab.from.slice(0, 7)} ↔ {tab.to}</span>
@@ -178,7 +193,7 @@ function DiffView({ tab }: { tab: Extract<Tab, { kind: 'diff' }> }) {
   const ps = usePS()
   const gitTick = useStore((s) => s.gitTick)
   const [sides, setSides] = useState<{ a: string; b: string } | null>(null)
-  const [inline, setInline] = useState(false)
+  const { ref, inline, setInline } = useDiffLayout()
   const st = useStore((s) => s.repoStatus[tab.cwd]?.files.find((f) => f.path === tab.rel))
 
   useEffect(() => {
@@ -199,7 +214,7 @@ function DiffView({ tab }: { tab: Extract<Tab, { kind: 'diff' }> }) {
   }, [tab.id, gitTick])
 
   return (
-    <div className="diff-wrap">
+    <div className="diff-wrap" ref={ref}>
       <div className="diff-bar">
         <span className="mono small">{tab.rel}</span>
         <span className="badge">{tab.mode === 'staged' ? 'HEAD ↔ índice' : tab.mode === 'unstaged' ? 'índice ↔ trabajo' : 'HEAD ↔ trabajo'}</span>
