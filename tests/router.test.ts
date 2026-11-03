@@ -26,6 +26,14 @@ describe('motor de enrutado', () => {
     expect(decideRoute('Arregla el bug del carrito', ctx())).toMatchObject({ agent: 'codex', category: 'debug' })
   })
 
+  it('enruta el manejo del ordenador a Codex aunque Claude esté libre', () => {
+    for (const text of ['Toma el control remoto de mi Mac', 'Abre el navegador y pulsa el botón', 'Maneja mi ordenador']) {
+      expect(decideRoute(text, ctx({ lastAgent: 'claude', busy: { claude: false, codex: true } })).agent).toBe('codex')
+    }
+    expect(decideRoute('@claude controla mi ordenador', ctx()).agent).toBe('claude')
+    expect(decideRoute('Implementa el control de versiones', ctx({ lastAgent: 'claude' })).reason).not.toContain('Control del ordenador')
+  })
+
   it('una mención manda siempre', () => {
     expect(decideRoute('@codex explícame esto', ctx())).toMatchObject({ agent: 'codex', method: 'mention' })
   })

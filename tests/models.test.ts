@@ -23,7 +23,8 @@ describe('modelo según la dificultad', () => {
     // sin estimación, o difícil con poca seguridad, el de las sencillas (el caro solo si se ve difícil)
     expect(pickModel('codex', undefined, policy)).toEqual({ model: 'gpt-6.1-terra', tier: 'easy', guessed: true })
     expect(pickModel('claude', 'hard', policy, undefined, 0.2)).toEqual({ model: 'claude-sonnet-5-5', tier: 'easy', guessed: true })
-    expect(pickModel('claude', 'hard', policy, undefined, 0.3)?.model).toBe('claude-opus-5-5')
+    expect(pickModel('claude', 'hard', policy, undefined, 0.8)?.model).toBe('claude-opus-5-5')
+    expect(pickModel('claude', 'hard', policy, undefined, 0.3)?.model).toBe('claude-sonnet-5-5')
   })
 
   it('nunca elige un modelo sin marcar ni uno que el CLI instalado no tenga', () => {
@@ -110,6 +111,13 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(s.asked).toHaveLength(1)
   })
 
+  it('una estimación difícil moderada no dispara modelo potente ni razonamiento alto', async () => {
+    const s = setup(() => ({ category: 'frontend', tier: 'hard', tierConfidence: 0.6 }))
+    const t = s.dispatcher.createThread(s.project.id)
+    const r = await s.dispatcher.sendThread(t.id, 'Al pulsar los gastos abre un popup y dime de dónde salen los porcentajes', { agent: 'codex' })
+    expect(r.decision).toMatchObject({ model: 'gpt-6.1-terra', effort: 'medium' })
+  })
+
   it('razonamiento: medio por defecto, alto o bajo solo si Jev lo ve claro, y nunca por encima de alto', async () => {
     const s = setup((text) => ({
       category: 'plan',
@@ -120,7 +128,7 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     // duda (o no contesta): medio
     const r1 = await s.dispatcher.sendThread(t.id, 'arquitectura, quizá')
     expect(r1.decision).toMatchObject({ effort: 'medium' })
-    expect(r1.decision?.reason).toContain('razonamiento medio (seguridad 30 %, hace falta 75 %)')
+    expect(r1.decision?.reason).toContain('razonamiento medio (seguridad 30 %, hace falta 90 %)')
     expect(r1.decision?.tierConfidence).toBe(0.3)
     expect(s.sent.at(-1)?.opts.effort).toBe('medium')
     // la conversación no lo fija: lo decide cada mensaje
@@ -231,9 +239,10 @@ describe('razonamiento automático', () => {
   it('sube o baja solo con confianza y respeta los niveles del modelo', () => {
     expect(pickEffort(undefined, undefined)).toEqual({ effort: 'medium', level: 'medium', sure: false })
     expect(pickEffort('hard', 0.4)).toMatchObject({ effort: 'medium', sure: false })
-    // alto exige más seguridad (75 %) que bajo (60 %): es lo que más gasta
+    // alto exige más seguridad (90 %) que bajo (60 %): es lo que más gasta
+    expect(pickEffort('hard', 0.9)).toMatchObject({ effort: 'high', sure: true })
     expect(pickEffort('hard', 0.7)).toMatchObject({ effort: 'medium', sure: false })
-    expect(pickEffort('hard', 0.75)).toMatchObject({ effort: 'high', sure: true })
+    expect(pickEffort('hard', 0.75)).toMatchObject({ effort: 'medium', sure: false })
     expect(pickEffort('easy', 0.6)).toMatchObject({ effort: 'low', sure: true })
     expect(pickEffort('easy', 0.95)).toMatchObject({ effort: 'low', sure: true })
     // un modelo sin «alto»: medio; sin niveles: ninguno

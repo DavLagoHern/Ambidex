@@ -33,6 +33,8 @@ export interface LimitWindow {
 }
 
 export interface AgentLimits {
+  source?: 'live' | 'session' | 'stream'
+  refreshError?: string
   agent: AgentId
   windows: LimitWindow[]
   status?: string

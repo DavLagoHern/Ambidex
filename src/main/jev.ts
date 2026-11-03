@@ -27,7 +27,7 @@ const CATEGORY_Q = 'The message is a request to an AI coding assistant. Which ki
 const FOLLOWUP_Q =
   'Does the message continue or depend on the previous request in the conversation (like "yes, do it", "and now…", "the same for…") rather than start a new independent task?'
 // Solo el mensaje: con «si continúa la petición anterior, juzga esa» un «haz commit» tras una tarea grande salía difícil
-const DIFFICULTY_Q = 'Classify the work this message asks an AI coding assistant to do. Judge only this message, not the project.'
+const DIFFICULTY_Q = 'Classify only the concrete work requested in message. Ignore previous_request when judging difficulty. Default to easy for bounded questions, UI features and local fixes. Choose hard only when the message explicitly requires complex architecture, cross-subsystem migration, concurrency investigation or deep analysis. Uncertainty, screenshots, typos, urgency and multiple small changes are not evidence of difficulty.'
 // por debajo de esta confianza el tipo de tarea no se usa (0 = reparto uniforme, 1 = seguro)
 const MIN_CONFIDENCE = 0.2
 

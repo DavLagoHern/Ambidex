@@ -1,3 +1,4 @@
+import { fetchAccountLimits } from './agents/usage-limits'
 import { app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, nativeImage, nativeTheme, Notification, shell } from 'electron'
 import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
@@ -641,10 +642,20 @@ function handlers(): Handlers {
     'runs:log': (runId) => store.runLog(runId),
 
     'agents:info': (refresh) => (refresh || !agentInfo.length ? refreshAgents() : agentInfo),
-    'agents:limits': () => {
+    'agents:limits': async (refresh) => {
       const all: Partial<Record<AgentId, AgentLimits>> = store.getLimits()
       const codex = latestCodexLimits()
       if (codex && (!all.codex || codex.updatedAt > all.codex.updatedAt)) all.codex = codex
+      if (refresh) {
+        try {
+          const bin = resolveBin('codex', settings())
+          if (!bin) throw new Error('Codex no está instalado')
+          all.codex = await fetchAccountLimits(bin, homedir(), childEnv())
+          store.saveLimits(all.codex)
+        } catch (error) {
+          all.codex = { ...(all.codex ?? { agent: 'codex', windows: [], updatedAt: 0 }), refreshError: error instanceof Error ? error.message : String(error) }
+        }
+      }
       return all
     },
     'agents:oneShot': (agent, cwd, prompt, stdin, model) => {

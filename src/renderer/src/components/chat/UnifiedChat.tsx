@@ -110,7 +110,11 @@ function PendingTurn({ p }: { p: PendingSend }) {
   return (
     <div className="turn">
       <div className="msg-user-wrap">
-        <div className="msg-user" style={p.error ? undefined : { opacity: 0.92 }}>{p.text}</div>
+        <SentImages paths={p.images} />
+        <div className="msg-user-line">
+          <CopyButton text={p.text} title="Copiar el mensaje" className="icon-btn msg-copy" />
+          <div className="msg-user">{p.text}</div>
+        </div>
         {!p.error && <div className="row gap msg-user-meta"><span className="route-chip">{target === 'auto' ? 'Jev está pensando…' : 'Preparando…'}</span></div>}
         {p.error && (
           <span className="route-chip" title={p.error}>

@@ -111,7 +111,7 @@ export const claudeAdapter: Adapter = {
               usedPercent: Math.round((w?.utilization ?? 0) * 100),
               resetsAt: w?.resetsAt
             }))
-            const limits: AgentLimits = { agent: 'claude', windows, status: info.status, updatedAt: Date.now() }
+            const limits: AgentLimits = { agent: 'claude', source: 'stream', windows, status: info.status, updatedAt: Date.now() }
             out.push({ kind: 'limits', limits })
             break
           }

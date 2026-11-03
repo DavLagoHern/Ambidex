@@ -2,7 +2,7 @@ import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentId, AgentModel, ChatItem, ModelTier, QueuedMessage, RouteDecision, SessionMeta, Settings, ThreadMeta } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY, DEFAULT_ROUTE_PREFS } from '@shared/types'
 import { titleFromPrompt } from '@shared/chat'
-import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, pickEffort, pickModel, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
+import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, pickEffort, pickModel, requestsComputerControl, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
 import type { Store } from '../db/store'
 import type { SessionService } from './service'
 
@@ -143,6 +143,7 @@ export class Dispatcher {
       return withModel(override ? manual(override) : decideRoute(text, ctx, cls), cls)
     }
     if (override) return withModel(manual(override))
+    if (requestsComputerControl(text) && !/^@(claude|codex)\b/i.test(text.trim())) return withModel(decideRoute(text, ctx))
     const rules = decideRoute(text, ctx)
     if (rules.method === 'mention' || mode !== 'ai' || !this.d.aiRoute) return withModel(rules)
     try {

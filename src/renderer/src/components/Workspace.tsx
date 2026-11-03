@@ -1,8 +1,9 @@
+import { UsagePopup } from './UsagePopup'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import type { AgentId, AgentLimits, DevScript } from '@shared/types'
 import { AGENT_NAMES, AGENTS } from '@shared/types'
 import { api } from '../lib/api'
-import { setApp, toast, useApp } from '../lib/app-store'
+import { toast, useApp } from '../lib/app-store'
 import { SidebarView, usePS, useStore } from '../lib/project-store'
 import { basename, untilText } from '../lib/utils'
 import { ActivityLogPanel, AgentsPanel } from './ActivityPanel'
@@ -60,7 +61,7 @@ function ActivityBar() {
 function LimitMini({ agent, limits }: { agent: AgentId; limits?: AgentLimits }) {
   if (!limits?.windows.length) return null
   return (
-    <span className="limit-mini" title={limits.windows.map((w) => `${w.label}: ${w.usedPercent}%${w.resetsAt ? ` · se reinicia en ${untilText(w.resetsAt)}` : ''}`).join('\n')}>
+    <span className="limit-mini" title={limits.windows.map((w) => `${w.label}: ${w.usedPercent}% consumido${w.resetsAt ? ` · se reinicia en ${untilText(w.resetsAt)}` : ''}`).join('\n')}>
       <AgentLogo agent={agent} size={11} />
       {limits.windows.slice(0, 2).map((w) => (
         <span key={w.label} className="limit-mini-item">
@@ -68,7 +69,7 @@ function LimitMini({ agent, limits }: { agent: AgentId; limits?: AgentLimits }) 
           <span className="meter">
             <span className={`meter-fill ${w.usedPercent >= 85 ? 'hot' : w.usedPercent >= 60 ? 'warm' : ''}`} style={{ width: `${Math.min(100, w.usedPercent)}%` }} />
           </span>
-          <span className="tabular">{w.usedPercent}%</span>
+          <span className="tabular">{w.usedPercent}% usado</span>
         </span>
       ))}
     </span>
@@ -76,6 +77,7 @@ function LimitMini({ agent, limits }: { agent: AgentId; limits?: AgentLimits }) 
 }
 
 function StatusBar() {
+  const [usageOpen, setUsageOpen] = useState(false)
   const ps = usePS()
   const ws = useStore((s) => s.workspace)
   const root = useStore((s) => s.meta.path)
@@ -117,12 +119,13 @@ function StatusBar() {
           {running.length === 1 ? `${AGENT_NAMES[running[0]]} trabajando` : `${running.length} agentes trabajando`}
         </span>
       )}
-      <button className="sb-item" onClick={() => setApp({ overlay: 'settings', settingsSection: 'agents' })} title="Uso de los planes (ventanas de límite)">
+      <button className="sb-item" onClick={() => setUsageOpen(true)} title="Ver consumo de los planes (porcentaje consumido)">
         {AGENTS.map((a) => (
           <LimitMini key={a} agent={a} limits={limits[a]} />
         ))}
         {!limits.claude && !limits.codex && <span className="muted">Los límites de uso aparecerán tras el primer mensaje</span>}
       </button>
+      {usageOpen && <UsagePopup onClose={() => setUsageOpen(false)} />}
     </div>
   )
 }

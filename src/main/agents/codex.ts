@@ -83,7 +83,7 @@ export function codexDefaultModel(info: CodexModels): { model?: string; warning?
 
 // ---------- límites (Codex los escribe en el fichero de sesión, no en el stream) ----------
 
-function windowLabel(minutes?: number) {
+export function windowLabel(minutes?: number) {
   if (!minutes) return 'Ventana'
   if (minutes === 300) return '5 h'
   if (minutes === 10080) return 'Semana'
@@ -103,7 +103,8 @@ export function parseRolloutLimits(text: string, mtime: number): AgentLimits | u
   const windows: LimitWindow[] = []
   for (const w of [rl.primary, rl.secondary])
     if (w) windows.push({ label: windowLabel(w.window_minutes), usedPercent: Math.round(w.used_percent ?? 0), resetsAt: w.resets_at })
-  return { agent: 'codex', windows, plan: rl.plan_type, status: rl.rate_limit_reached_type ? 'limit_reached' : 'allowed', updatedAt: mtime }
+  const recordedAt = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN
+  return { agent: 'codex', source: 'session', windows, plan: rl.plan_type, status: rl.rate_limit_reached_type ? 'limit_reached' : 'allowed', updatedAt: Number.isFinite(recordedAt) ? recordedAt : mtime }
 }
 
 function sessionDirs(home: string): string[] {

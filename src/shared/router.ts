@@ -24,11 +24,10 @@ export const CATEGORY_CRITERIA: Record<BuiltinCategory, string> = {
   review: 'review code, look for bugs or security problems in existing changes',
   terminal: 'terminal commands, shell scripts, installing dependencies, docker, CI or deployment'
 }
-// Medido con Jev (jevos-v5) sobre 25 mensajes reales: estos aciertan 22; los anteriores, 6 de 12. Lo que más
-// ayuda es juzgar solo el trabajo que pide el mensaje (no el tamaño del proyecto) y nombrar casos concretos.
+// Clasificar el trabajo concreto, sin heredar la complejidad del proyecto o del turno anterior.
 export const DIFFICULTY_CRITERIA: Record<ModelTier, string> = {
-  hard: 'hard engineering: design a new system, workflow or architecture; investigate a problem whose cause is unknown (crashes, freezes, intermittent failures, leaks, CI-only failures); race conditions, migrations, security audits; build or rewrite a feature across many files',
-  easy: 'routine: a quick question about the code, an explanation, a small visual tweak (size, spacing, color, font), a small edit or text change, translating strings, git commit/push/tag, restarting, running or installing something'
+  hard: 'Complex engineering with explicit evidence of broad scope: design a new architecture or protocol, coordinate a migration across subsystems, investigate concurrency or data corruption, resolve a persistent failure after several failed fixes, or perform a deep security audit. Requires substantial reasoning about interactions and tradeoffs. A new UI component, an unknown data source, or a report that something looks wrong is not enough.',
+  easy: 'Default for bounded everyday work: answer questions, explain where a value comes from, inspect a data source, add a popup or modal, display usage or statistics, fix alignment or overflow, wire a button, correct a percentage, adjust styles, fix a local bug, small features, ordinary tests, git commit/push, build/install/restart. Several related small UI changes still count as routine. Short follow-ups do not inherit the previous task difficulty.'
 }
 
 export const DEFAULT_CATEGORIES: RouteCategoryDef[] = (Object.keys(CATEGORY_CRITERIA) as BuiltinCategory[]).map((id) => ({
@@ -105,7 +104,7 @@ export const TIER_LABELS: Record<ModelTier, string> = { hard: 'difícil', easy: 
 // contesta a tiempo o deciden las reglas, el de las sencillas, que sigue siendo muy capaz y gasta bastante menos.
 // Sin `confidence` (lo decidió otra IA, que no da seguridad) se toma la dificultad tal cual.
 // `catalog`: modelos que ofrece el CLI instalado; uno que no esté (CLI antiguo) no se elige.
-export const HARD_MODEL_CONFIDENCE = 0.3
+export const HARD_MODEL_CONFIDENCE = 0.8
 export function pickModel(
   agent: AgentId,
   tier: ModelTier | undefined,
@@ -126,7 +125,7 @@ export function pickModel(
 // claramente difícil (hace falta más seguridad: es lo que más gasta), bajo para una claramente sencilla. Nunca
 // por encima de alto (muy alto, máximo…): gastan mucho límite y tardan, y eso no se elige sin que lo pidas tú.
 // `supported`: niveles del modelo (undefined = no se sabe; [] = el modelo no tiene niveles).
-export const EFFORT_CONFIDENCE: Record<ModelTier, number> = { hard: 0.75, easy: 0.6 }
+export const EFFORT_CONFIDENCE: Record<ModelTier, number> = { hard: 0.9, easy: 0.6 }
 export type AutoEffort = 'low' | 'medium' | 'high'
 export function pickEffort(tier: ModelTier | undefined, confidence: number | undefined, supported?: string[]): { effort?: string; level: AutoEffort; sure: boolean } {
   const sure = !!tier && (confidence ?? 0) >= EFFORT_CONFIDENCE[tier]
@@ -150,6 +149,13 @@ const labelOf = (ctx: RouteContext, c: RouteCategory) => ctx.labels?.[c] ?? CATE
 
 // Decide qué agente atiende un mensaje del chat único: con lo que entendió Jev o, sin él, por palabras clave.
 // Las preferencias por tipo de tarea, la disponibilidad, los límites y la carga se aplican igual en los dos casos.
+// Solo solicitudes de manejar la interfaz; no confundir control de versiones o implementar la función.
+export function requestsComputerControl(text: string): boolean {
+  const action = /\b(control(?:a|ar|es)?|maneja(?:r)?|usa|usar|utiliza(?:r)?|abre|abrir|haz clic|pulsa|pincha|mueve el rat[oó]n|escribe en|interact[uú]a|take control|control|use|click|open|navigate)\b/i
+  const target = /\b(ordenador|computadora|mac(?:book)?|escritorio|pantalla|rat[oó]n|teclado|ventana|aplicaci[oó]n|navegador|browser|desktop|computer|screen|mouse|keyboard|gui)\b/i
+  return /\b(control remoto|control del ordenador|control de mi (?:mac|ordenador)|computer use|remote control)\b/i.test(text) || (action.test(text) && target.test(text))
+}
+
 export function decideRoute(text: string, ctx: RouteContext, cls?: Classification): RouteDecision {
   const t = text.trim()
   const mention = t.match(/^@(claude|codex)\b/i)
@@ -157,6 +163,8 @@ export function decideRoute(text: string, ctx: RouteContext, cls?: Classificatio
     const agent = mention[1].toLowerCase() as AgentId
     return { agent, reason: `Mencionado con @${agent}`, method: 'mention' }
   }
+
+  if (requestsComputerControl(t)) return { agent: 'codex', reason: 'Control del ordenador → Codex', method: 'rules' }
 
   const category = cls ? cls.category : classify(t).category
   const followUp = !!ctx.lastAgent && (cls ? cls.followUp : FOLLOW_UP.test(t) || (!category && t.length < 80))

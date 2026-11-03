@@ -1,3 +1,4 @@
+import { collapseTurn, type Step } from '@shared/turn-layout'
 import { KeyboardEvent as ReactKeyboardEvent, memo, RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, ChatItem, ClaudeMode, CodexSandbox, Permission, QueuedMessage, RunInfo } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_PROMPTS, UNRESTRICTED } from '@shared/types'
@@ -338,29 +339,6 @@ export const Item = memo(function Item({ item, session }: { item: ChatItem; sess
 
 // ---------- turno terminado: los pasos intermedios en una sola fila ----------
 
-type Step = Extract<ChatItem, { type: 'tool' | 'thinking' | 'assistant' }>
-type TurnEntry = { kind: 'item'; item: ChatItem } | { kind: 'steps'; key: string; steps: Step[] }
-
-// Mientras trabaja se ve todo; al acabar, herramientas, razonamiento y textos intermedios se pliegan en una fila
-// (donde estaba el primero) y queda a la vista la respuesta final con los ficheros, avisos y errores
-export function collapseTurn(items: ChatItem[], done: boolean): TurnEntry[] {
-  if (!done) return items.map((item) => ({ kind: 'item', item }))
-  const final = items.findLast((i) => i.type === 'assistant')
-  const out: TurnEntry[] = []
-  let group: Extract<TurnEntry, { kind: 'steps' }> | null = null
-  for (const it of items) {
-    if ((it.type === 'tool' || it.type === 'thinking' || it.type === 'assistant') && it !== final) {
-      if (!group) {
-        group = { kind: 'steps', key: `steps-${it.id}`, steps: [] }
-        out.push(group)
-      }
-      group.steps.push(it)
-    } else out.push({ kind: 'item', item: it })
-  }
-  // un único paso no merece plegarse
-  return out.flatMap<TurnEntry>((e) => (e.kind === 'steps' && e.steps.length === 1 ? [{ kind: 'item' as const, item: e.steps[0] }] : [e]))
-}
-
 const Steps = memo(function Steps({ steps, session }: { steps: Step[]; session: SessionView }) {
   const [open, setOpen] = useState(false)
   const tools = steps.filter((s): s is Extract<Step, { type: 'tool' }> => s.type === 'tool')
@@ -396,7 +374,7 @@ export function TurnItems({ items, session, done }: { items: ChatItem[]; session
   const entries = useMemo(() => collapseTurn(items, done), [items, done])
   return (
     <>
-      {entries.map((e) => (e.kind === 'steps' ? <Steps key={e.key} steps={e.steps} session={session} /> : <Item key={e.item.id} item={e.item} session={session} />))}
+      {entries.map((e) => (e.kind === 'steps' ? <Steps key={`${done ? 'done' : 'live'}-${e.key}`} steps={e.steps} session={session} /> : <Item key={e.item.id} item={e.item} session={session} />))}
     </>
   )
 }

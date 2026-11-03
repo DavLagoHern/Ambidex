@@ -60,7 +60,7 @@ export interface IpcContract {
   'runs:log': (runId: string) => RunLogLine[]
 
   'agents:info': (refresh: boolean) => AgentInfo[]
-  'agents:limits': () => Partial<Record<AgentId, AgentLimits>>
+  'agents:limits': (refresh?: boolean) => Partial<Record<AgentId, AgentLimits>>
   'agents:oneShot': (agent: AgentId, cwd: string, prompt: string, stdin: string, model?: string) => string
   // versiones nuevas de los CLI: estado, comprobar ahora (instala si está activado) e instalar ya la de un agente
   'cli:updates': () => CliUpdate[]

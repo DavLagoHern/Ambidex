@@ -1883,6 +1883,7 @@ button.sb-item:hover {
     max-width: 120px;
   }
   .msg-user-wrap {
+    min-width: 0;
     max-width: 94%;
   }
 }
@@ -1982,6 +1983,7 @@ button.sb-item:hover {
   opacity: 0.6;
 }
 .msg-user-wrap {
+  min-width: 0;
   align-self: flex-end;
   display: flex;
   flex-direction: column;
@@ -1990,6 +1992,9 @@ button.sb-item:hover {
   max-width: 86%;
 }
 .msg-user {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 14px 14px 4px 14px;
@@ -4945,6 +4950,7 @@ button.sb-item:hover {
 
 /* copiar un mensaje: el botón asoma al pasar el ratón */
 .msg-user-line {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -5131,3 +5137,13 @@ button.sb-item:hover {
 .send-preview { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; border-top: 1px solid var(--border); }
 .send-preview > .ellipsis { flex: 1; min-width: 0; }
 .send-preview > small { color: var(--muted); flex-shrink: 0; }
+
+.usage-popup { max-height: 85vh; overflow-y: auto; }
+.usage-popup-head { justify-content: space-between; }
+.usage-popup-head h3 { margin: 0; }
+.usage-agent { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.usage-window { margin-top: 14px; }
+.usage-window > .row { flex-wrap: wrap; margin-bottom: 7px; }
+.usage-window > .row > b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.usage-window .meter { display: block; width: 100%; height: 6px; margin-bottom: 7px; }
+.usage-source { line-height: 1.6; }
