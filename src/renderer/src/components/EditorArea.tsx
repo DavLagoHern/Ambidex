@@ -1,3 +1,5 @@
+import { isImagePath } from '@shared/images'
+import { ChatImage } from './ChatImage'
 import { useEffect, useRef, useState } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { FileContent } from '@shared/types'
@@ -79,6 +81,7 @@ function FileEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' }>; vis
     }
   }, [visible, file])
 
+  if (isImagePath(tab.path)) return <div className="image-editor" style={{ display: visible ? undefined : 'none' }}><ChatImage src={tab.path} alt={tab.path.split('/').pop()} /></div>
   if (!file) return <div className="center-msg" style={{ display: visible ? undefined : 'none' }}>Cargando…</div>
   if (file.binary || file.tooLarge)
     return (

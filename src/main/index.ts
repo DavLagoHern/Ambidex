@@ -677,6 +677,13 @@ function handlers(): Handlers {
     },
 
     'fs:list': (dir) => files.listDir(guard.check(dir)),
+    'fs:image': (p) => {
+      const roots = [attachmentsDir(), join(codexHome(), 'generated_images'), app.getPath('temp'), '/tmp']
+      if (guard.allowed(p)) roots.unshift(p.substring(0, p.lastIndexOf('/')))
+      const root = roots.find((r) => new PathGuard(() => [r]).allowed(p))
+      if (!root) throw new Error('Imagen fuera de las carpetas permitidas')
+      return imageDataUrl(root, p)
+    },
     'fs:read': (p) => files.readText(guard.check(p)),
     'fs:write': async (p, content) => {
       await files.writeText(guard.check(p), content)

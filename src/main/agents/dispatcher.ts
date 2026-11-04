@@ -2,7 +2,7 @@ import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentId, AgentModel, ChatItem, ModelTier, QueuedMessage, RouteDecision, SessionMeta, Settings, ThreadMeta } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY, DEFAULT_ROUTE_PREFS } from '@shared/types'
 import { titleFromPrompt } from '@shared/chat'
-import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, pickEffort, pickModel, requestsComputerControl, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
+import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, analyzeRoutePrompt, pickEffort, pickModel, requestsComputerControl, requestsImageGeneration, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
 import type { Store } from '../db/store'
 import type { SessionService } from './service'
 
@@ -42,6 +42,14 @@ interface PinSet {
   models?: Pins
   efforts?: Pins
 }
+
+// El usuario eligió a este agente con palabras («dile a Codex que…»): la petición es para él, no tiene que reenviarla.
+const DELEGATED_TO_YOU =
+  '<ambidex>El usuario ha elegido que lo haga el agente que recibe este mensaje. Si habla de ti en tercera persona («dile a Codex que…»), es para ti: hazlo tú directamente, sin reenviarlo ni lanzar otro agente.</ambidex>'
+
+// Delegar con el CLI del otro agente por terminal lo deja fuera de Ambidex (sin panel, sin chat, sin poder pararlo).
+const NO_CLI_DELEGATION =
+  '<ambidex>No lances los CLI `codex` o `claude` desde la terminal para delegar trabajo: Ambidex no los vería ni podría pararlos. Si algo debe hacerlo el otro agente, dilo en tu respuesta y Ambidex se lo enviará; tú no lo ejecutes.</ambidex>'
 
 export interface ThreadSendResult {
   decision?: RouteDecision
@@ -137,13 +145,25 @@ export class Dispatcher {
     const ctx = this.routeContext(thread)
     const manual = (agent: AgentId): RouteDecision => ({ agent, reason: `Elegido por ti → ${AGENT_NAMES[agent]}`, method: 'manual' })
     const mode = this.d.settings().routerMode
-    const withModel = (d: RouteDecision, cls?: Pick<Classification, 'tier' | 'tierConfidence'>) => this.withModel(thread, d, cls, pins)
+    const withModel = (d: RouteDecision, cls?: Pick<Classification, 'tier' | 'tierConfidence' | 'ultra'>) => this.withModel(thread, d, cls, pins)
+    if (requestsImageGeneration(text)) {
+      if (!ctx.available.codex) throw new Error('Activa Codex para generar imágenes')
+      return withModel({ agent: 'codex', reason: 'Generación de imágenes → Codex', method: 'rules' })
+    }
     if (mode === 'jev') {
       const cls = await this.understand(thread, text, ctx, JEV_BUDGET.send, !override)
+      const target: AgentId | undefined = cls?.delegate === 'other' ? (ctx.lastAgent ? (ctx.lastAgent === 'claude' ? 'codex' : 'claude') : undefined) : cls?.delegate
+      if (!override && cls && target && (cls.delegateConfidence ?? 0) >= 0.6 && ctx.available[target]) {
+        const agent = target
+        return withModel({ agent, reason: `Se lo pides a ${AGENT_NAMES[agent]}`, method: 'jev', category: cls.category, delegated: true }, cls)
+      }
+      if (!override) {
+        const deep = await this.analyze(thread, text, ctx, cls)
+        if (deep) return withModel(deep.decision, { tier: cls?.tier ?? deep.tier, tierConfidence: cls?.tierConfidence })
+      }
       return withModel(override ? manual(override) : decideRoute(text, ctx, cls), cls)
     }
     if (override) return withModel(manual(override))
-    if (requestsComputerControl(text) && !/^@(claude|codex)\b/i.test(text.trim())) return withModel(decideRoute(text, ctx))
     const rules = decideRoute(text, ctx)
     if (rules.method === 'mention' || mode !== 'ai' || !this.d.aiRoute) return withModel(rules)
     try {
@@ -163,13 +183,39 @@ export class Dispatcher {
     return withModel(rules)
   }
 
+  // Análisis a fondo con un modelo rápido (Haiku) cuando el mensaje nombra a un agente, trata de manejar el ordenador o Jev
+  // no lo tiene claro. Entiende la intención («dile a Codex que…» ≠ «cómo funciona Codex»), que unas palabras clave no captan.
+  // Si no contesta a tiempo o falla, se usa lo que decidió Jev con sus reglas.
+  private async analyze(thread: ThreadMeta | undefined, text: string, ctx: RouteContext, cls?: Classification): Promise<{ decision: RouteDecision; tier?: ModelTier } | undefined> {
+    const t = text.trim()
+    if (!this.d.aiRoute || !t || /^@(claude|codex)\b/i.test(t)) return
+    const unsure = !cls || cls.category === undefined || (cls.confidence ?? 0) < 0.6
+    if (!(requestsComputerControl(t) || unsure)) return
+    try {
+      const last = ctx.lastAgent && thread ? this.sessionOf(thread, ctx.lastAgent) : undefined
+      const cwd = (thread && this.d.store.getProject(thread.projectId)?.path) ?? process.cwd()
+      const out = await within(this.d.aiRoute(analyzeRoutePrompt(t, ctx, last ? this.d.store.lastUserText(last.id) : undefined), cwd), 8000)
+      const m = out?.match(/\{[\s\S]*\}/)
+      const j = m ? JSON.parse(m[0]) : null
+      if (j?.agent !== 'claude' && j?.agent !== 'codex') return
+      const agent = j.agent as AgentId
+      if (!ctx.available[agent]) return
+      const tier = j.difficulty === 'hard' || j.difficulty === 'easy' ? (j.difficulty as ModelTier) : undefined
+      const delegated = j.delegated === true
+      const reason = String(j.reason || `Analizado → ${AGENT_NAMES[agent]}`).slice(0, 160)
+      return { tier, decision: { agent, reason: `${reason} · analizado con IA`, method: 'ai', category: cls?.category, delegated } }
+    } catch {
+      return
+    }
+  }
+
   private autoEffort() {
     return this.policy().autoEffort !== false
   }
 
   // Modelo del turno: el que fijaste en la conversación o, si no, el de su dificultad según Ajustes → Modelos.
   // Sin esa opción, el de la conversación, como siempre. Después, el razonamiento.
-  private withModel(thread: ThreadMeta | undefined, d: RouteDecision, cls?: Pick<Classification, 'tier' | 'tierConfidence'>, pins?: PinSet): RouteDecision {
+  private withModel(thread: ThreadMeta | undefined, d: RouteDecision, cls?: Pick<Classification, 'tier' | 'tierConfidence' | 'ultra'>, pins?: PinSet): RouteDecision {
     const models = this.d.models?.(d.agent)
     const label = (id: string) => models?.find((m) => m.id === id)?.label ?? id
     const session = thread && this.sessionOf(thread, d.agent)
@@ -191,14 +237,14 @@ export class Dispatcher {
   }
 
   // Razonamiento del turno: el que fijaste en la conversación o, si no, medio salvo que Jev vea clara la dificultad
-  private withEffort(d: RouteDecision, session: SessionMeta | undefined, cls: Pick<Classification, 'tier' | 'tierConfidence'> | undefined, pins: PinSet | undefined, models?: AgentModel[]): RouteDecision {
+  private withEffort(d: RouteDecision, session: SessionMeta | undefined, cls: Pick<Classification, 'tier' | 'tierConfidence' | 'ultra'> | undefined, pins: PinSet | undefined, models?: AgentModel[]): RouteDecision {
     const name = (e: string) => EFFORT_NAMES[e] ?? e
     const pinned = session?.effort || pins?.efforts?.[d.agent]
     if (pinned) return { ...d, effort: pinned, reason: `${d.reason} · razonamiento ${name(pinned)} (fijado)` }
     const modelId = d.model || session?.model || this.d.settings()[d.agent === 'claude' ? 'claudeModel' : 'codexModel']
     // sin modelo conocido se toman los niveles del primero del catálogo (el que usaría el CLI por defecto)
     const info = modelId ? models?.find((m) => m.id === modelId) : models?.[0]
-    const pick = pickEffort(cls?.tier, cls?.tierConfidence, info ? info.efforts : undefined)
+    const pick = pickEffort(cls?.tier, cls?.tierConfidence, info ? info.efforts : undefined, cls?.ultra)
     if (!pick.effort) return d
     // si no subió/bajó, por qué: sin estimar o con poca seguridad
     const why = pick.sure ? '' : cls?.tier ? ` (seguridad${pct(cls.tierConfidence)}, hace falta ${Math.round(EFFORT_CONFIDENCE[cls.tier] * 100)} %)` : ' (por defecto)'
@@ -322,7 +368,7 @@ export class Dispatcher {
     const session = this.ensureSession(thread, decision.agent, { model: opts.models?.[decision.agent], effort: opts.efforts?.[decision.agent] })
     thread = this.d.store.getThread(threadId) ?? thread
     const cross = this.crossContext(thread, decision.agent)
-    const context = [cross, this.parallelContext(thread, decision.agent), opts.context].filter(Boolean).join('\n\n') || undefined
+    const context = [cross, this.parallelContext(thread, decision.agent), opts.context, NO_CLI_DELEGATION, decision.delegated ? DELEGATED_TO_YOU : undefined].filter(Boolean).join('\n\n') || undefined
     const prompt = text.replace(/^@(claude|codex)\b\s*/i, '') || text
     this.d.service.send(session.id, prompt, context, { route: decision, images: opts.images, model: decision.model, effort: decision.effort })
     // El agente que ya estaba trabajando también recibe la tarea del que acaba de entrar.

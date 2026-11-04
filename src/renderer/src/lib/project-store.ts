@@ -1,3 +1,4 @@
+import { cleanFileRef } from '@shared/images'
 import { createContext, useContext, useSyncExternalStore } from 'react'
 import type {
   AgentId, ChatItem, DevScript, GitStatus, ProjectMeta, QueuedMessage, RouteDecision, RunInfo, SessionCreate, SessionMeta, SessionPatch, ThreadMeta
@@ -521,7 +522,10 @@ export class ProjectStore {
     })
   }
 
-  openFile = (path: string, line?: number) => this.openTab({ id: `file:${path}`, kind: 'file', path, title: basename(path), line })
+  openFile = (path: string, line?: number) => {
+    path = cleanFileRef(path)
+    this.openTab({ id: `file:${path}`, kind: 'file', path, title: basename(path), line })
+  }
 
   openDiff = (cwd: string, rel: string, mode: 'unstaged' | 'staged' | 'head') => {
     const label = mode === 'staged' ? 'preparado' : mode === 'head' ? 'vs HEAD' : 'cambios'

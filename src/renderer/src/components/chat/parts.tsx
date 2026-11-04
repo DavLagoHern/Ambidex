@@ -1,3 +1,5 @@
+import { toolImages } from '@shared/images'
+import { ChatImage } from '../ChatImage'
 import { collapseTurn, type Step } from '@shared/turn-layout'
 import { KeyboardEvent as ReactKeyboardEvent, memo, RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, ChatItem, ClaudeMode, CodexSandbox, Permission, QueuedMessage, RunInfo } from '@shared/types'
@@ -37,11 +39,14 @@ const EFFORT_LABELS: Record<string, string> = {
 // ---------- elementos del chat ----------
 
 function ToolRow({ item, cwd }: { item: Extract<ChatItem, { type: 'tool' }>; cwd: string }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState<boolean | null>(null)
   const input = item.input.split(cwd + '/').join('')
+  const images = [...new Set([...(item.images ?? []), ...toolImages(item.output), ...(/^(Read|view_image|.*image.*)$/i.test(item.name) ? toolImages(item.input) : [])])]
+  const expanded = open ?? images.length > 0
+  const expandable = !!item.output || images.length > 0
   return (
-    <div className={`tool tool-${item.status} ${open ? 'open' : ''}`}>
-      <button className="tool-head" onClick={() => item.output && setOpen(!open)}>
+    <div className={`tool tool-${item.status} ${expanded ? 'open' : ''}`}>
+      <button className="tool-head" onClick={() => expandable && setOpen(!expanded)}>
         <span className="tool-status">
           {item.status === 'running' ? <Icon.spinner size={13} className="spin" /> : item.status === 'error' ? <Icon.fail size={13} /> : <Icon.ok size={13} />}
         </span>
@@ -49,9 +54,10 @@ function ToolRow({ item, cwd }: { item: Extract<ChatItem, { type: 'tool' }>; cwd
         <span className="tool-input mono ellipsis" title={item.input}>
           {input}
         </span>
-        {item.output && <Icon.chevronRight size={12} className="tool-chevron" />}
+        {expandable && <Icon.chevronRight size={12} className="tool-chevron" />}
       </button>
-      {open && item.output && <pre className="tool-output">{item.output}</pre>}
+      {expanded && images.length > 0 && <div className="tool-images">{images.map(src => <ChatImage key={src} src={src} />)}</div>}
+      {expanded && item.output && <pre className="tool-output">{item.output}</pre>}
     </div>
   )
 }

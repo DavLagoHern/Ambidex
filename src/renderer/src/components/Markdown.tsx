@@ -1,3 +1,5 @@
+import { cleanFileRef, isImagePath } from '@shared/images'
+import { ChatImage } from './ChatImage'
 import { Fragment, MouseEvent, ReactNode, memo, useMemo } from 'react'
 import { findLinks } from '@shared/web'
 import { api } from '../lib/api'
@@ -7,13 +9,13 @@ import { useOptionalPS } from '../lib/project-store'
 import { joinPath } from '../lib/utils'
 import { Icon } from './Icons'
 
-type OpenFile = (file: string, line?: number) => void
+type OpenFile = ((file: string, line?: number) => void) & { imagePath?: (file: string) => string }
 
 // Rutas de ficheros en el texto de los agentes: src/app.ts, ./a/b.tsx:12, package.json#L3
 const FILE_REF = /^(\.{0,2}\/)?[\w@.-]+(\/[\w@.-]+)*\.[A-Za-z0-9]{1,8}((:|#L)\d+)?$/
 
 function parseRef(ref: string): { file: string; line?: number } {
-  const m = ref.replace(/^file:\/\//, '').match(/^([^#:]+)(?:#L?(\d+)|:(\d+))?/)
+  const m = cleanFileRef(ref).match(/^([^#:]+)(?:#L?(\d+)|:(\d+))?/)
   return { file: m?.[1] ?? ref, line: Number(m?.[2] ?? m?.[3]) || undefined }
 }
 
@@ -37,8 +39,9 @@ function linkify(text: string, key: string): ReactNode[] {
 }
 
 function inline(text: string, open: OpenFile, key = 0): ReactNode[] {
+  const openImagePath = (file: string) => open.imagePath?.(file) ?? file
   const out: ReactNode[] = []
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\([^)]+\))/g
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(!?\[[^\]]*\]\([^)]+\))/g
   let last = 0
   let m: RegExpExecArray | null
   let i = 0
@@ -55,6 +58,7 @@ function inline(text: string, open: OpenFile, key = 0): ReactNode[] {
             <code>{code}</code>
           </a>
         )
+      else if (isImagePath(code)) out.push(<ChatImage key={k} src={openImagePath(cleanFileRef(code))} alt={code.split('/').pop()} />)
       else if (FILE_REF.test(code) && (code.includes('/') || code.includes(':') || /\.(ts|tsx|js|jsx|py|go|rs|swift|json|md|css|html|java|kt|rb|php|sh|yml|yaml|toml)$/.test(code))) {
         const r = parseRef(code)
         out.push(
@@ -66,8 +70,11 @@ function inline(text: string, open: OpenFile, key = 0): ReactNode[] {
     } else if (m[2]) out.push(<strong key={k}>{inline(t.slice(2, -2), open, i)}</strong>)
     else if (m[3]) out.push(<em key={k}>{t.slice(1, -1)}</em>)
     else if (m[4]) {
-      const lm = t.match(/^\[([^\]]+)\]\(([^)]+)\)$/)!
-      const href = lm[2]
+      const lm = t.match(/^!?\[([^\]]*)\]\(([^)]+)\)$/)!
+      const href = cleanFileRef(lm[2])
+      if (t.startsWith('!') || isImagePath(href)) {
+        out.push(<ChatImage key={k} src={/^(https?:|data:|\/)/.test(href) ? href : openImagePath(href)} alt={lm[1]} />)
+      } else
       if (/^https?:/.test(href))
         out.push(
           <a key={k} className="web-link" href={href} data-url={href} title={href}>
@@ -144,7 +151,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const ps = useOptionalPS()
   const links = useLinkHandlers()
   // las rutas de ficheros solo se abren dentro de un proyecto
-  const open: OpenFile = (file, line) => ps?.openFile(joinPath(ps.state.workspace, file), line)
+  const open: OpenFile = (file, line) => ps?.openFile(joinPath(ps.state.workspace, cleanFileRef(file)), line)
+  open.imagePath = (file) => ps ? joinPath(ps.state.workspace, file) : file
   const lines = text.split('\n')
   const blocks: ReactNode[] = []
   let i = 0

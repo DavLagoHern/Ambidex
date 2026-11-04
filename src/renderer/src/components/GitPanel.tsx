@@ -635,7 +635,7 @@ export function GitPanel() {
                     </button>
                   </span>
                 </div>
-                {!collapsed.staged && <div className="section-scroll">{
+                {!collapsed.staged && <div className="section-scroll" style={{ minHeight: Math.min(staged.length, 3) * 26 }}>{
                   staged.map((f) => (
                     <FileRow
                       key={'s' + f.path}
@@ -672,7 +672,7 @@ export function GitPanel() {
                   </span>
                 )}
               </div>
-              {!collapsed.changes && unstaged.length > 0 && <div className="section-scroll">
+              {!collapsed.changes && unstaged.length > 0 && <div className="section-scroll" style={{ minHeight: Math.min(unstaged.length, 3) * 26 }}>
                 {unstaged.map((f) => (
                   <FileRow
                     key={'u' + f.path}

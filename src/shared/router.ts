@@ -26,8 +26,8 @@ export const CATEGORY_CRITERIA: Record<BuiltinCategory, string> = {
 }
 // Clasificar el trabajo concreto, sin heredar la complejidad del proyecto o del turno anterior.
 export const DIFFICULTY_CRITERIA: Record<ModelTier, string> = {
-  hard: 'Complex engineering with explicit evidence of broad scope: design a new architecture or protocol, coordinate a migration across subsystems, investigate concurrency or data corruption, resolve a persistent failure after several failed fixes, or perform a deep security audit. Requires substantial reasoning about interactions and tradeoffs. A new UI component, an unknown data source, or a report that something looks wrong is not enough.',
-  easy: 'Default for bounded everyday work: answer questions, explain where a value comes from, inspect a data source, add a popup or modal, display usage or statistics, fix alignment or overflow, wire a button, correct a percentage, adjust styles, fix a local bug, small features, ordinary tests, git commit/push, build/install/restart. Several related small UI changes still count as routine. Short follow-ups do not inherit the previous task difficulty.'
+  hard: 'Complex engineering with explicit evidence of broad scope: design a new architecture or protocol, coordinate a migration across subsystems, investigate concurrency or data corruption, resolve a persistent failure after several failed fixes, perform a deep security audit, do advanced design (redesign a whole screen, flow or visual system, with layout, hierarchy and interaction decisions), or handle a long request with many distinct deliverables or a detailed multi-part specification. Requires substantial reasoning about interactions and tradeoffs. A new UI component, an unknown data source, or a report that something looks wrong is not enough.',
+  easy: 'Default for bounded everyday work: answer questions, explain where a value comes from, inspect a data source, add a popup or modal, display usage or statistics, fix alignment or overflow, wire a button, correct a percentage, adjust styles, fix a local bug, small features, ordinary tests, git commit/push, build/install/restart. Retouching one detail of a design (spacing, color, copy, an icon, one component) is easy even when the design itself is advanced. Several related small UI changes still count as routine. Short follow-ups do not inherit the previous task difficulty.'
 }
 
 export const DEFAULT_CATEGORIES: RouteCategoryDef[] = (Object.keys(CATEGORY_CRITERIA) as BuiltinCategory[]).map((id) => ({
@@ -94,6 +94,11 @@ export interface Classification {
   // dificultad, si se preguntó y la tiene clara, y lo segura que está (0 = duda, 1 = segura)
   tier?: ModelTier
   tierConfidence?: number
+  // agente al que se le pide expresamente el trabajo («dile a Codex que…»)
+  delegate?: AgentId | 'other'
+  // probabilidad de que sea una tarea ultra compleja (razonamiento muy alto)
+  ultra?: number
+  delegateConfidence?: number
   via: 'jev'
 }
 
@@ -121,19 +126,20 @@ export function pickModel(
   return { model: want ?? allowed[0], tier: t, guessed: !sure }
 }
 
-// Razonamiento de un turno en Auto. Por defecto medio; Jev solo lo mueve si lo ve claro: alto para una tarea
-// claramente difícil (hace falta más seguridad: es lo que más gasta), bajo para una claramente sencilla. Nunca
-// por encima de alto (muy alto, máximo…): gastan mucho límite y tardan, y eso no se elige sin que lo pidas tú.
-// `supported`: niveles del modelo (undefined = no se sabe; [] = el modelo no tiene niveles).
+// Razonamiento de un turno en Auto. Nunca bajo: por defecto medio; alto para una tarea claramente difícil (hace
+// falta más seguridad: es lo que más gasta) y muy alto solo para una ultra compleja (Jev debe estar muy seguro).
+// Nunca máximo: eso solo lo eliges tú. `supported`: niveles del modelo (undefined = no se sabe; [] = no tiene niveles).
 export const EFFORT_CONFIDENCE: Record<ModelTier, number> = { hard: 0.9, easy: 0.6 }
-export type AutoEffort = 'low' | 'medium' | 'high'
-export function pickEffort(tier: ModelTier | undefined, confidence: number | undefined, supported?: string[]): { effort?: string; level: AutoEffort; sure: boolean } {
-  const sure = !!tier && (confidence ?? 0) >= EFFORT_CONFIDENCE[tier]
-  const level: AutoEffort = sure ? (tier === 'hard' ? 'high' : 'low') : 'medium'
-  if (!supported || supported.includes(level)) return { effort: level, level, sure }
-  if (supported.includes('medium')) return { effort: 'medium', level: 'medium', sure: false }
+export const ULTRA_CONFIDENCE = 0.9
+export type AutoEffort = 'medium' | 'high' | 'xhigh'
+export function pickEffort(tier: ModelTier | undefined, confidence: number | undefined, supported?: string[], ultra?: number): { effort?: string; level: AutoEffort; sure: boolean } {
+  const sure = tier === 'hard' && (confidence ?? 0) >= EFFORT_CONFIDENCE.hard
+  const want: AutoEffort = sure ? ((ultra ?? 0) >= ULTRA_CONFIDENCE ? 'xhigh' : 'high') : 'medium'
+  const order: AutoEffort[] = ['xhigh', 'high', 'medium']
+  // el nivel pedido o, si el modelo no lo tiene, el siguiente por debajo
+  for (const level of order.slice(order.indexOf(want))) if (!supported || supported.includes(level)) return { effort: level, level, sure: sure && level === want }
   // el modelo no tiene niveles (o ninguno de estos): lo que traiga por defecto el CLI
-  return { effort: undefined, level, sure: false }
+  return { effort: undefined, level: want, sure: false }
 }
 
 export const EFFORT_NAMES: Record<string, string> = {
@@ -156,8 +162,14 @@ export function requestsComputerControl(text: string): boolean {
   return /\b(control remoto|control del ordenador|control de mi (?:mac|ordenador)|computer use|remote control)\b/i.test(text) || (action.test(text) && target.test(text))
 }
 
+// Generation/editing requests, not questions about images or image display bugs.
+export function requestsImageGeneration(text: string): boolean {
+  return /\b(?:genera(?:r|me)?|crea(?:r|me)?|dibuja(?:r|me)?|hazme|generate|create|draw|edit|edita(?:r|me)?|retoca(?:r|me)?)\b[^.!?\n]{0,100}\b(?:im[aá]ge(?:n|nes)|ilustraci[oó]n|foto(?:graf[ií]a)?|image|picture|illustration|photo)\b/i.test(text.normalize('NFD').replace(/\p{Diacritic}/gu, ''))
+}
+
 export function decideRoute(text: string, ctx: RouteContext, cls?: Classification): RouteDecision {
   const t = text.trim()
+  if (requestsImageGeneration(t)) return { agent: 'codex', reason: 'Generación de imágenes → Codex', method: 'rules' }
   const mention = t.match(/^@(claude|codex)\b/i)
   if (mention) {
     const agent = mention[1].toLowerCase() as AgentId
@@ -212,6 +224,31 @@ Estado: Claude ${ctx.busy.claude ? 'ocupado' : 'libre'}${ctx.usage.claude !== un
 ${ctx.lastAgent ? `El mensaje anterior lo atendió ${ctx.lastAgent}. Si es una continuación, mantén ese agente.` : ''}
 Indica también la dificultad: "hard" si pide arquitectura, errores difíciles, refactorizaciones grandes o cambios en muchos ficheros; "easy" si es una pregunta, una explicación o un cambio pequeño.
 Responde SOLO con JSON: {"agent":"claude"|"codex","difficulty":"hard"|"easy","reason":"motivo breve en español"}
+
+Mensaje:
+${text.slice(0, 4000)}`
+}
+
+
+// Análisis a fondo de a quién corresponde un mensaje (lo hace un modelo, sin palabras clave): quién debe EJECUTAR la tarea,
+// aunque el usuario hable de un agente con el otro («dile a Codex que…») o nombre a uno solo como tema.
+export function analyzeRoutePrompt(text: string, ctx: RouteContext, previousRequest?: string): string {
+  const prefs = (Object.entries(ctx.prefs) as [RouteCategory, AgentId | 'any'][])
+    .filter(([c]) => !ctx.labels || c in ctx.labels)
+    .map(([c, a]) => `- ${labelOf(ctx, c)}: ${a === 'any' ? 'cualquiera' : AGENT_NAMES[a]}`)
+    .join('\n')
+  return `Eres el enrutador de una app con dos agentes de programación: Claude Code ("claude") y Codex ("codex"). Analiza el mensaje con cuidado y decide QUÉ AGENTE DEBE EJECUTAR lo que pide.
+Reglas, por este orden:
+1. Si el usuario indica quién debe hacerlo (aunque se lo diga al otro: "dile a Codex que revise…", "que lo haga Claude", "pásaselo a Codex", "pídele a Claude…"), lo ejecuta ESE agente. Entiende la intención, no solo las palabras: si solo se nombra a un agente como tema ("explícame cómo funciona Codex", "compara Claude con Codex"), NO es una orden de delegar.
+2. Manejar el ordenador, la pantalla, el ratón o el navegador (control remoto, uso del ordenador) → Codex.
+3. Si es una continuación de lo anterior, mantén el mismo agente.
+4. Si no, usa las preferencias del usuario por tipo de tarea:
+${prefs}
+5. Con igualdad, el agente más libre y con más margen de uso.
+Estado: Claude ${ctx.busy.claude ? 'ocupado' : 'libre'}${ctx.usage.claude !== undefined ? ` (${ctx.usage.claude}% de uso)` : ''}; Codex ${ctx.busy.codex ? 'ocupado' : 'libre'}${ctx.usage.codex !== undefined ? ` (${ctx.usage.codex}% de uso)` : ''}.
+${ctx.lastAgent ? `El mensaje anterior lo atendió ${ctx.lastAgent}${previousRequest ? `, que había recibido: «${previousRequest.slice(0, 400)}»` : ''}.` : 'No hay mensaje anterior.'}
+Responde SOLO con JSON: {"agent":"claude"|"codex","delegated":true|false,"difficulty":"hard"|"easy","reason":"motivo breve en español"}
+"delegated" es true solo si el usuario eligió explícitamente al agente (regla 1 o 2).
 
 Mensaje:
 ${text.slice(0, 4000)}`

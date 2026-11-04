@@ -1,3 +1,4 @@
+import { toolImages } from '@shared/images'
 import { readFileSync } from 'fs'
 import type { AgentEvent, AgentLimits, ClaudeMode, LimitWindow } from '@shared/types'
 import { imageMime } from '../attachments'
@@ -152,6 +153,7 @@ export const claudeAdapter: Adapter = {
                 name: t?.name || 'tool',
                 input: t ? toolSummary(t.name, t.input) : '',
                 status: block.is_error ? 'error' : 'done',
+                images: toolImages(block.content),
                 output: short(content ?? '')
               })
               if (t && !block.is_error && EDIT_TOOLS.includes(t.name)) {

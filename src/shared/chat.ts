@@ -66,6 +66,7 @@ export function reduceEvent(items: ChatItem[], ev: AgentEvent, ctx: ReduceContex
         input: ev.input,
         status: ev.status,
         output: ev.output,
+        images: ev.images,
         at: idx >= 0 ? items[idx].at : ctx.now
       }
       if (idx >= 0) replace(idx, item)

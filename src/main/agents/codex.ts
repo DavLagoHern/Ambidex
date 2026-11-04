@@ -1,3 +1,4 @@
+import { toolImages } from '@shared/images'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -156,6 +157,9 @@ const NOISE = /Skill descriptions were shortened|Model metadata for .* not found
 
 function toolItem(item: any, done: boolean): AgentEvent | null {
   switch (item.type) {
+    case 'image_generation':
+    case 'imageGeneration':
+      return { kind: 'tool', id: item.id, name: 'Imagen', input: '', status: done ? 'done' : 'running', images: toolImages(item.result && /^[A-Za-z0-9+/=]+$/.test(item.result) ? `data:image/png;base64,${item.result}` : item) }
     case 'command_execution':
       return {
         kind: 'tool',
@@ -184,6 +188,7 @@ function toolItem(item: any, done: boolean): AgentEvent | null {
         name: `${item.server}.${item.tool}`,
         input: short(item.arguments ?? '', 600),
         status: !done ? 'running' : item.error ? 'error' : 'done',
+        images: done ? toolImages(item.result) : undefined,
         output: done ? short(item.error?.message ?? item.result ?? '') : undefined
       }
     case 'web_search':

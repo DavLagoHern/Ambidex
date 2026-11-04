@@ -4,6 +4,8 @@ export type Step = Extract<ChatItem, { type: 'tool' | 'thinking' | 'assistant' }
 export type TurnEntry = { kind: 'item'; item: ChatItem } | { kind: 'steps'; key: string; steps: Step[] }
 
 // Pliega bloques anteriores mientras trabaja y agrupa la actividad al finalizar.
+const hasResponseImage = (item: ChatItem) => item.type === 'assistant' && /!?\[[^\]]*\]\([^\n]*\.(png|jpe?g|gif|webp)>?\)/i.test(item.text)
+
 export function collapseTurn(items: ChatItem[], done: boolean): TurnEntry[] {
   if (!done) {
     const out: TurnEntry[] = []
@@ -29,7 +31,7 @@ export function collapseTurn(items: ChatItem[], done: boolean): TurnEntry[] {
   const out: TurnEntry[] = []
   let group: Extract<TurnEntry, { kind: 'steps' }> | null = null
   for (const it of items) {
-    if ((it.type === 'tool' || it.type === 'thinking' || it.type === 'assistant') && it !== final) {
+    if ((it.type === 'tool' || it.type === 'thinking' || it.type === 'assistant' && !hasResponseImage(it)) && it !== final) {
       if (!group) {
         group = { kind: 'steps', key: `steps-${it.id}`, steps: [] }
         out.push(group)

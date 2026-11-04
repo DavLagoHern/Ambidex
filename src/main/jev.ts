@@ -27,7 +27,16 @@ const CATEGORY_Q = 'The message is a request to an AI coding assistant. Which ki
 const FOLLOWUP_Q =
   'Does the message continue or depend on the previous request in the conversation (like "yes, do it", "and now…", "the same for…") rather than start a new independent task?'
 // Solo el mensaje: con «si continúa la petición anterior, juzga esa» un «haz commit» tras una tarea grande salía difícil
-const DIFFICULTY_Q = 'Classify only the concrete work requested in message. Ignore previous_request when judging difficulty. Default to easy for bounded questions, UI features and local fixes. Choose hard only when the message explicitly requires complex architecture, cross-subsystem migration, concurrency investigation or deep analysis. Uncertainty, screenshots, typos, urgency and multiple small changes are not evidence of difficulty.'
+const DIFFICULTY_Q = 'Classify only the concrete work requested in message. Ignore previous_request when judging difficulty. Default to easy for bounded questions, UI features and local fixes. Choose hard only when the message explicitly requires complex architecture, cross-subsystem migration, concurrency investigation, deep analysis, advanced design of a whole screen or system, or a long request with many distinct deliverables. Touching up a single detail is easy. Uncertainty, screenshots, typos, urgency and multiple small changes are not evidence of difficulty.'
+// ¿Se pide a un agente concreto que haga el trabajo («dile a Codex que…», «que lo haga Claude») o solo se le menciona?
+const DELEGATE_Q = 'Is the user, right now in this message, giving an order to a specific agent so that it does the work (examples: "dile a codex que rehaga esto", "que lo haga claude", "pídele a codex que revise", "que lo haga el otro")? Answer an agent only for a present or future order addressed to it. Answer none when: no agent is named; the agent is a topic ("explícame cómo funciona codex", "compara codex y claude"); the user reports something already done or said in the past ("le he dicho a codex que lo haga", "codex ya lo hizo", "claude me dijo que..."); the agent is quoted or criticized; or the user only comments on the result of an agent ("codex lo ha hecho distinto").'
+const DELEGATE_CRITERIA = {
+  none: 'No order is given to an agent: no agent is named, it is only a topic, a past event, a quote or a comment on what an agent did.',
+  codex: 'The user orders Codex (OpenAI) to do the work now or next.',
+  claude: 'The user orders Claude (Anthropic) to do the work now or next.',
+  other: 'The user orders "the other agent" (not the previous one) to do the work now or next, without naming it.'
+}
+const ULTRA_Q = 'Is the concrete work requested ultra complex: a very large or open-ended task that needs long, deep reasoning across many parts of a system (for example designing and building a whole subsystem, a large migration, a hard bug that survived many attempts, or a deep security or concurrency audit)? Ordinary hard tasks, design of one screen, and anything bounded are not ultra complex.'
 // por debajo de esta confianza el tipo de tarea no se usa (0 = reparto uniforme, 1 = seguro)
 const MIN_CONFIDENCE = 0.2
 
@@ -104,7 +113,7 @@ export class Jev {
   private idle?: ReturnType<typeof setTimeout>
   private abort?: AbortController
   private st: JevStatus
-  private cache = new Map<string, Classification & { probabilities: Partial<Record<RouteCategory, number>>; followP?: number; tierConfidence?: number }>()
+  private cache = new Map<string, Classification & { probabilities: Partial<Record<RouteCategory, number>>; followP?: number; tierConfidence?: number; delegate?: 'codex' | 'claude' | 'other'; ultra?: number; delegateConfidence?: number }>()
   private fetch: typeof fetch
 
   constructor(private d: JevDeps) {
@@ -360,6 +369,8 @@ export class Jev {
     if (hit) return { ...hit, ms: 0 }
     const questions: Record<string, unknown> = { category: { type: 'choice', instructions: CATEGORY_Q, criteria: categories } }
     if (ctx.previousAgent) questions.followup = { type: 'noul', instructions: FOLLOWUP_Q }
+    questions.delegate = { type: 'choice', instructions: DELEGATE_Q, criteria: DELEGATE_CRITERIA }
+    if (ctx.difficulty) questions.ultra = { type: 'noul', instructions: ULTRA_Q }
     if (ctx.difficulty) questions.difficulty = { type: 'choice', instructions: DIFFICULTY_Q, criteria: levels }
     const t0 = Date.now()
     const a = await this.ask(state, questions, timeoutMs)
@@ -377,6 +388,9 @@ export class Jev {
       followP,
       tier: dif?.choice && dif.choice in levels && (dif.confidence ?? 0) >= MIN_CONFIDENCE ? (dif.choice as ModelTier) : undefined,
       tierConfidence: dif?.confidence,
+      ultra: a.ultra?.noul,
+      delegate: a.delegate?.choice === 'codex' || a.delegate?.choice === 'claude' || a.delegate?.choice === 'other' ? (a.delegate.choice as 'codex' | 'claude' | 'other') : undefined,
+      delegateConfidence: a.delegate?.confidence,
       probabilities: (cat?.probabilities ?? {}) as Partial<Record<RouteCategory, number>>
     }
     if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!)

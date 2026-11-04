@@ -34,6 +34,7 @@ export const api = {
     active: bind('web:active'),
     revokeAgent: bind('web:revokeAgent')
   },
+  readImage: bind('fs:image'),
   attachments: {
     save: bind('attachments:save'),
     read: bind('attachments:read')

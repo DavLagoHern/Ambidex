@@ -72,6 +72,7 @@ export interface IpcContract {
   'self:restart': () => void
 
   'fs:list': (dir: string) => DirEntry[]
+  'fs:image': (path: string) => string
   'fs:read': (path: string) => FileContent
   'fs:write': (path: string, content: string) => void
   'fs:watch': (projectId: string, dir: string) => void

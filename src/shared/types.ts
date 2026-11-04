@@ -69,7 +69,7 @@ export type AgentEvent =
   | { kind: 'session'; sessionId: string; model?: string }
   | { kind: 'text'; text: string; streaming?: boolean }
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool'; id: string; name: string; input: string; status: 'running' | 'done' | 'error'; output?: string }
+  | { kind: 'tool'; id: string; name: string; input: string; status: 'running' | 'done' | 'error'; output?: string; images?: string[] }
   | { kind: 'files'; id: string; files: { path: string; change: string }[] }
   | { kind: 'todo'; items: { text: string; done: boolean }[] }
   | { kind: 'usage'; usage: TurnUsage }
@@ -85,7 +85,7 @@ export type ChatItem =
   | { id: string; type: 'user'; text: string; context?: string; route?: RouteDecision; images?: string[]; at: number; steering?: boolean }
   | { id: string; type: 'assistant'; text: string; streaming?: boolean; at?: number }
   | { id: string; type: 'thinking'; text: string; at?: number }
-  | { id: string; type: 'tool'; toolId: string; name: string; input: string; status: 'running' | 'done' | 'error'; output?: string; at?: number }
+  | { id: string; type: 'tool'; toolId: string; name: string; input: string; status: 'running' | 'done' | 'error'; output?: string; images?: string[]; at?: number }
   | { id: string; type: 'files'; files: { path: string; change: string }[]; at?: number }
   | { id: string; type: 'todo'; items: { text: string; done: boolean }[]; at?: number }
   | { id: string; type: 'usage'; usage: TurnUsage; at?: number }
@@ -179,6 +179,8 @@ export interface RouteDecision {
   agent: AgentId
   reason: string
   method: 'manual' | 'mention' | 'rules' | 'ai' | 'jev'
+  // el usuario eligió al agente con palabras («dile a Codex…»): el mensaje es para quien lo recibe
+  delegated?: boolean
   category?: RouteCategory
   // modelo del turno: elegido por dificultad o fijado en la conversación
   model?: string

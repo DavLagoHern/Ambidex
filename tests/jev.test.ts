@@ -144,7 +144,7 @@ describe('Jev (modelo local del enrutado)', () => {
     const hard = await jev.classify('Refactoriza la arquitectura de pagos', { difficulty: true })
     expect(hard).toMatchObject({ tier: 'hard' })
     const req2 = JSON.parse(readFileSync(join(dir, 'jevos-v5', 'requests.log'), 'utf8').trim().split('\n')[1])
-    expect(Object.keys(req2.questions)).toEqual(['category', 'difficulty'])
+    expect(Object.keys(req2.questions)).toEqual(['category', 'delegate', 'ultra', 'difficulty'])
     expect(Object.keys(req2.questions.difficulty.criteria)).toEqual(['hard', 'easy'])
     expect(await jev.test('cambia el color del botón')).toMatchObject({ tier: 'easy' })
 

@@ -104,3 +104,4 @@ describe('tipos de tarea del usuario', () => {
     expect(decideRoute('cobro', { ...base, labels, prefs: DEFAULT_ROUTE_PREFS }, cls).reason).toContain('Pagos · reparto de carga')
   })
 })
+

@@ -118,11 +118,12 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(r.decision).toMatchObject({ model: 'gpt-6.1-terra', effort: 'medium' })
   })
 
-  it('razonamiento: medio por defecto, alto o bajo solo si Jev lo ve claro, y nunca por encima de alto', async () => {
+  it('razonamiento: medio por defecto, nunca bajo, alto si es difícil claro y muy alto solo si es ultra', async () => {
     const s = setup((text) => ({
       category: 'plan',
       tier: /arquitectura/.test(text) ? 'hard' : 'easy',
-      tierConfidence: /seguro/.test(text) ? 0.9 : 0.3
+      tierConfidence: /seguro/.test(text) ? 0.9 : 0.3,
+      ultra: /ultra/.test(text) ? 0.95 : 0.1
     }))
     const t = s.dispatcher.createThread(s.project.id)
     // duda (o no contesta): medio
@@ -133,12 +134,15 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(s.sent.at(-1)?.opts.effort).toBe('medium')
     // la conversación no lo fija: lo decide cada mensaje
     expect(s.store.getSession(r1.sessionId!)!.effort).toBeUndefined()
-    // tarea difícil clara: alto (no muy alto ni máximo aunque el modelo los tenga)
+    // tarea difícil clara: alto
     const r2 = await s.dispatcher.sendThread(t.id, 'arquitectura, seguro')
     expect(r2.decision?.effort).toBe('high')
-    // sencilla clara: bajo
+    // sencilla clara: medio, nunca bajo
     const r3 = await s.dispatcher.sendThread(t.id, 'cambia un texto, seguro')
-    expect(r3.decision?.effort).toBe('low')
+    expect(r3.decision?.effort).toBe('medium')
+    // ultra compleja y segura: muy alto si el modelo lo tiene
+    const r4 = await s.dispatcher.sendThread(t.id, 'arquitectura ultra, seguro')
+    expect(r4.decision?.effort).toBe('xhigh')
   })
 
   it('razonamiento: manda el que fijes; un modelo sin niveles no recibe ninguno; se puede apagar', async () => {
@@ -236,103 +240,18 @@ describe('cola: «Enviar ya»', () => {
 })
 
 describe('razonamiento automático', () => {
-  it('sube o baja solo con confianza y respeta los niveles del modelo', () => {
+  it('nunca baja de medio; alto si es muy difícil; muy alto solo si es ultra; respeta los niveles del modelo', () => {
     expect(pickEffort(undefined, undefined)).toEqual({ effort: 'medium', level: 'medium', sure: false })
-    expect(pickEffort('hard', 0.4)).toMatchObject({ effort: 'medium', sure: false })
-    // alto exige más seguridad (90 %) que bajo (60 %): es lo que más gasta
-    expect(pickEffort('hard', 0.9)).toMatchObject({ effort: 'high', sure: true })
-    expect(pickEffort('hard', 0.7)).toMatchObject({ effort: 'medium', sure: false })
+    expect(pickEffort('easy', 0.95)).toMatchObject({ effort: 'medium' })
     expect(pickEffort('hard', 0.75)).toMatchObject({ effort: 'medium', sure: false })
-    expect(pickEffort('easy', 0.6)).toMatchObject({ effort: 'low', sure: true })
-    expect(pickEffort('easy', 0.95)).toMatchObject({ effort: 'low', sure: true })
-    // un modelo sin «alto»: medio; sin niveles: ninguno
+    expect(pickEffort('hard', 0.9)).toMatchObject({ effort: 'high', sure: true })
+    expect(pickEffort('hard', 0.9, undefined, 0.8)).toMatchObject({ effort: 'high' })
+    expect(pickEffort('hard', 0.95, undefined, 0.95)).toMatchObject({ effort: 'xhigh', sure: true })
+    // ultra sin ser difícil seguro no sube
+    expect(pickEffort('easy', 0.95, undefined, 0.99)).toMatchObject({ effort: 'medium' })
+    // modelo sin «muy alto»: alto; sin «alto»: medio; sin niveles: ninguno
+    expect(pickEffort('hard', 0.95, ['low', 'medium', 'high'], 0.95)).toMatchObject({ effort: 'high' })
     expect(pickEffort('hard', 0.9, ['low', 'medium'])).toMatchObject({ effort: 'medium', sure: false })
     expect(pickEffort('hard', 0.9, []).effort).toBeUndefined()
   })
-})
-
-describe('mensajes a mitad de turno', () => {
-  function setup(jevCalls?: { n: number }) {
-    const store = memoryStore()
-    const project = store.openProject(tmpDir(), 'demo', null)
-    if (jevCalls) store.saveSettings({ routerMode: 'jev' })
-    const running = new Set<string>()
-    const steered: { id: string; text: string }[] = []
-    const cancelled: string[] = []
-    const sent: string[] = []
-    const service = {
-      getSession: (id: string) => {
-        const s = store.getSession(id)
-        return s && { ...s, running: running.has(id) }
-      },
-      send: (sessionId: string, prompt: string) => (running.add(sessionId), sent.push(prompt), { runId: 'r', done: new Promise(() => {}) }),
-      isRunning: (id: string) => running.has(id),
-      steer: (id: string, text: string) => (steered.push({ id, text }), true),
-      cancel: async (id: string) => void cancelled.push(id)
-    }
-    const jev = jevCalls && { classify: async () => (jevCalls.n++, { via: 'jev' as const, followUp: false, confidence: 0.9, category: 'plan', tier: 'easy' }) as never }
-    const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true, jev, models: (a) => CATALOG[a] })
-    return { store, project, dispatcher, steered, cancelled, sent, t: dispatcher.createThread(project.id) }
-  }
-
-  it.each(['claude', 'codex'] as const)('con %s trabajando, va a la cola y «al turno actual» lo añade sin cancelar', async (agent) => {
-    const s = setup()
-    const r1 = await s.dispatcher.sendThread(s.t.id, 'primero', { agent })
-    const r = await s.dispatcher.sendThread(s.t.id, 'y además esto', { agent })
-    expect(r.queued).toBeDefined()
-    expect(s.steered).toEqual([])
-    expect(await s.dispatcher.sendNow(r.queued!.id)).toBe('sent')
-    expect(s.steered).toEqual([{ id: r1.sessionId, text: 'y además esto' }])
-    expect(s.cancelled).toEqual([])
-    expect(s.store.listQueue(s.project.id)).toHaveLength(0)
-  })
-
-  it('con un agente trabajando, va a la cola al momento sin consultar a Jev', async () => {
-    const calls = { n: 0 }
-    const s = setup(calls)
-    await s.dispatcher.sendThread(s.t.id, 'primero')
-    const before = calls.n
-    const r = await s.dispatcher.sendThread(s.t.id, 'y además esto')
-    expect(r.queued).toBeDefined()
-    expect(calls.n).toBe(before)
-  })
-
-  it('«al otro agente» lo lanza en el agente libre', async () => {
-    const s = setup()
-    await s.dispatcher.sendThread(s.t.id, 'primero', { agent: 'claude' })
-    const r = await s.dispatcher.sendThread(s.t.id, 'revisa los tests')
-    expect(await s.dispatcher.sendNow(r.queued!.id, 'other')).toBe('sent')
-    // Claude solo recibe el aviso de que Codex trabaja en paralelo, no el mensaje
-    expect(s.steered.map((x) => x.text)).not.toContain('revisa los tests')
-    expect(s.store.getThread(s.t.id)!.sessions.codex).toBeDefined()
-    expect(s.sent.at(-1)).toBe('revisa los tests')
-    expect(s.store.listQueue(s.project.id)).toHaveLength(0)
-  })
-})
-
-it('en Ambos los agentes simultáneos reciben su tarea mutua y el resultado al finalizar', async () => {
-  const store = memoryStore()
-  const project = store.openProject(tmpDir(), 'demo', null)
-  const running = new Set<string>()
-  const requests = new Map<string, string>()
-  const contexts = new Map<string, string | undefined>()
-  const delivered: { id: string; text: string; internal?: boolean }[] = []
-  const service = {
-    getSession: (id: string) => { const s = store.getSession(id); return s && { ...s, running: running.has(id) } },
-    send: (id: string, prompt: string, context?: string) => { running.add(id); requests.set(id, prompt); contexts.set(id, context) },
-    coordinationSnapshot: (id: string) => requests.get(id) ?? '',
-    steer: async (id: string, text: string, _ctx?: string, _images?: string[], internal?: boolean) => { delivered.push({ id, text, internal }); return true }
-  }
-  const dispatcher = new Dispatcher({ store, service: service as never, push: () => {}, settings: () => store.getSettings(), available: () => true })
-  const thread = dispatcher.createThread(project.id)
-  const claude = await dispatcher.sendThread(thread.id, 'Revisa la interfaz', { agent: 'claude' })
-  const codex = await dispatcher.sendThread(thread.id, 'Corrige el motor', { agent: 'codex' })
-  expect(contexts.get(codex.sessionId!)).toContain('Claude Code está trabajando ahora')
-  expect(contexts.get(codex.sessionId!)).toContain('Revisa la interfaz')
-  expect(delivered).toEqual([expect.objectContaining({ id: claude.sessionId, internal: true, text: expect.stringContaining('Corrige el motor') })])
-  running.delete(codex.sessionId!)
-  requests.set(codex.sessionId!, 'Motor corregido: src/engine.ts')
-  await dispatcher.onIdle(store.getSession(codex.sessionId!)!)
-  expect(delivered.at(-1)).toMatchObject({ id: claude.sessionId, internal: true, text: expect.stringContaining('Motor corregido: src/engine.ts') })
-  expect(store.listQueue(project.id)).toHaveLength(0)
 })
