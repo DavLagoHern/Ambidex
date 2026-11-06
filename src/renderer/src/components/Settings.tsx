@@ -569,7 +569,7 @@ function ModelsSection({ settings, info }: { settings: S; info: (a: AgentId) => 
         En el chat único, cada mensaje se clasifica como tarea <b>difícil</b> o <b>sencilla</b> y va al modelo que elijas para ese caso en el agente que lo atienda. Los
         modelos sin marcar no se usan nunca.
       </p>
-      <Row label="Elegir el modelo según la dificultad" hint={`${who} Si duda o no contesta a tiempo, se usa el de las difíciles. Si fijas un modelo en el selector de una conversación, manda el tuyo.`}>
+      <Row label="Elegir el modelo según la dificultad" hint={`${who} Con más del 80 % semanal disponible se usa el modelo de las difíciles; con menos margen decide la dificultad. Sin una estimación segura se usa el ligero. Si fijas un modelo en el selector de una conversación, manda el tuyo.`}>
         <Switch checked={policy.auto} onChange={(v) => save({ auto: v })} />
       </Row>
       <Row
@@ -727,7 +727,7 @@ function DataSection() {
       </Row>
       <Row label="Versión">
         <span className="mono small">
-          Ambidex {info?.version} · Electron {info?.electron} · Node {info?.node}
+          Ambidex {info?.version} · {info?.runtime} · {info?.webview}
         </span>
       </Row>
     </>

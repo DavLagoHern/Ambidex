@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ambidex",
+  "version": "0.2.0",
+  "identifier": "dev.ambidex.app",
+  "build": {
+    "beforeDevCommand": "npm run dev:assets",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build:assets",
+    "frontendDist": "../out/renderer"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Ambidex",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 640,
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "dragDropEnabled": true,
+        "create": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173; object-src 'none'; frame-src 'none'",
+      "capabilities": [
+        "desktop"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "category": "DeveloperTool",
+    "icon": [
+      "../build/icon.icns",
+      "../build/icon.png"
+    ],
+    "resources": {
+      "../out/engine/index.mjs": "engine/index.mjs"
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "infoPlist": "Info.plist"
+    }
+  }
+}

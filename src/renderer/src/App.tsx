@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './lib/api'
-import { initApp, openProjectPath, projectStore, useApp } from './lib/app-store'
+import { toast, initApp, openProjectPath, projectStore, useApp } from './lib/app-store'
 import { handleKey, runCommand } from './lib/commands'
 import { ProjectProvider } from './lib/project-store'
 import { GitOutput, Picker } from './components/GitMenu'
@@ -10,7 +10,7 @@ import { QuickOpen } from './components/QuickOpen'
 import { SettingsModal, TextDialog } from './components/Settings'
 import { TabBar } from './components/TabBar'
 import { Welcome } from './components/Welcome'
-import { Workspace } from './components/Workspace'
+import { ProjectSpaces } from './components/ProjectSpaces'
 import { SetupGuide } from './components/SetupGuide'
 
 // Carpetas soltadas sobre la ventana → se abren como proyecto
@@ -34,11 +34,21 @@ function useFolderDrop() {
         if (entry?.isDirectory && file) openProjectPath(api.pathForFile(file))
       })
     }
+    const nativeDrop = (event: Event) => {
+      const detail = (event as CustomEvent<{ claimed: boolean; files: { path: string; isDir: boolean }[] }>).detail
+      // Composer listeners claim drops synchronously; project opening waits until all have run.
+      setTimeout(() => { if (!detail.claimed) detail.files.filter(f => f.isDir).forEach(f => openProjectPath(f.path)) }, 0)
+    }
+    const nativeError = (event: Event) => toast(String((event as CustomEvent).detail), 'error')
+    window.addEventListener('native-error', nativeError)
+    window.addEventListener('native-drop', nativeDrop)
     window.addEventListener('dragenter', enter)
     window.addEventListener('dragleave', leave)
     window.addEventListener('dragover', overFn)
     window.addEventListener('drop', drop)
     return () => {
+      window.removeEventListener('native-error', nativeError)
+      window.removeEventListener('native-drop', nativeDrop)
       window.removeEventListener('dragenter', enter)
       window.removeEventListener('dragleave', leave)
       window.removeEventListener('dragover', overFn)
@@ -50,8 +60,6 @@ function useFolderDrop() {
 
 export default function App() {
   const ready = useApp((s) => s.ready)
-  const openIds = useApp((s) => s.openIds)
-  const mounted = useApp((s) => s.mounted)
   const activeId = useApp((s) => s.activeId)
   const overlay = useApp((s) => s.overlay)
   const dropping = useFolderDrop()
@@ -74,18 +82,7 @@ export default function App() {
     <div className="app" style={project ? { ['--proj' as string]: project.color } : undefined}>
       <TabBar />
       <div className="workspaces">
-        {mounted
-          .filter((id) => openIds.includes(id))
-          .map((id) => {
-            const ps = projectStore(id)
-            return (
-              ps && (
-                <ProjectProvider key={id} value={ps}>
-                  <Workspace active={id === activeId} />
-                </ProjectProvider>
-              )
-            )
-          })}
+        <ProjectSpaces />
         {ready && !activeId && <Welcome />}
       </div>
 

@@ -3,7 +3,7 @@ import type { ProjectMeta } from '@shared/types'
 import { AGENTS } from '@shared/types'
 import { api } from '../lib/api'
 import {
-  activate, askText, attempt, closeProject, forgetProject, getApp, pickAndOpenProject, projectStore, reorderProjects, restartToUpdate, setApp, updateProject, useApp
+  activate, askText, attempt, closeProject, forgetProject, getApp, pickAndOpenProject, projectStore, reorderProjects, restartToUpdate, setApp, splitProjects, unsplitProjects, updateProject, useApp
 } from '../lib/app-store'
 import { ProjectProvider } from '../lib/project-store'
 import { LayoutControls } from './Dock'
@@ -64,6 +64,8 @@ async function tabMenu(p: ProjectMeta, askColor: (p: ProjectMeta) => void) {
     { id: 'pin', label: p.pinned ? 'Desfijar pestaña' : 'Fijar pestaña' },
     { id: 'rename', label: 'Renombrar…' },
     { id: 'color', label: 'Color…' },
+    { id: 'split', label: 'Ver junto al proyecto actual', enabled: getApp().openIds.length > 1 },
+    ...(getApp().projectSplit ? [{ id: 'unsplit', label: 'Ver solo este proyecto' }] : []),
     { type: 'separator' },
     { id: 'reveal', label: 'Mostrar en Finder' },
     { id: 'vscode', label: 'Abrir en VS Code' },
@@ -75,6 +77,8 @@ async function tabMenu(p: ProjectMeta, askColor: (p: ProjectMeta) => void) {
     { id: 'forget', label: 'Quitar de Ambidex…' }
   ])
   switch (choice) {
+    case 'split': return splitProjects(p.id)
+    case 'unsplit': return unsplitProjects(p.id)
     case 'pin':
       return updateProject(p.id, { pinned: !p.pinned })
     case 'rename': {
@@ -99,7 +103,7 @@ async function tabMenu(p: ProjectMeta, askColor: (p: ProjectMeta) => void) {
   }
 }
 
-function ProjectTab({ p, active, index, askColor }: { p: ProjectMeta; active: boolean; index: number; askColor: (p: ProjectMeta, rect: DOMRect) => void }) {
+function ProjectTab({ p, active, index, side, askColor }: { p: ProjectMeta; active: boolean; index: number; side?: string; askColor: (p: ProjectMeta, rect: DOMRect) => void }) {
   // el selector devuelve un string para que la instantánea sea estable
   const busyKey = useApp((s) =>
     Object.values(s.running)
@@ -115,7 +119,8 @@ function ProjectTab({ p, active, index, askColor }: { p: ProjectMeta; active: bo
 
   return (
     <div
-      className={`ptab ${active ? 'active' : ''} ${p.pinned ? 'pinned' : ''} ${drag ? `drop-${drag}` : ''}`}
+      className={`ptab ${active ? 'active' : ''} ${side ? 'in-pane' : ''} ${p.pinned ? 'pinned' : ''} ${drag ? `drop-${drag}` : ''}`}
+      data-tauri-drag-region="false"
       style={{ ['--proj' as string]: p.color }}
       draggable
       onDragStart={(e) => {
@@ -149,10 +154,11 @@ function ProjectTab({ p, active, index, askColor }: { p: ProjectMeta; active: bo
         const rect = e.currentTarget.getBoundingClientRect()
         tabMenu(p, (q) => askColor(q, rect))
       }}
-      title={`${p.path}${index < 9 ? `  (⌘${index + 1})` : ''}`}
+      title={`${p.path}${side ? ` · ${side} · Clic para enfocar este lado` : ''}${index < 9 ? `  (⌘${index + 1})` : ''}`}
     >
       <span className="ptab-avatar">{p.name.slice(0, 1).toUpperCase()}</span>
       {!p.pinned && <span className="ptab-name ellipsis">{p.name}</span>}
+      {side && <span className="ptab-side">{side}</span>}
       {agents.length > 0 && (
         <span className="ptab-agents" title={`${busy.length} agente${busy.length === 1 ? '' : 's'} trabajando`}>
           {agents.map((a) => (
@@ -227,6 +233,7 @@ export function TabBar() {
   const projects = useApp((s) => s.projects)
   const openIds = useApp((s) => s.openIds)
   const activeId = useApp((s) => s.activeId)
+  const split = useApp((s) => s.projectSplit)
   const tabs = openIds.map((id) => projects.find((p) => p.id === id)).filter((p): p is ProjectMeta => !!p)
   const store = projectStore(activeId)
   const [colorFor, setColorFor] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -234,18 +241,21 @@ export function TabBar() {
   const closeColor = useCallback(() => setColorFor(null), [])
 
   return (
-    <div className="tabbar">
-      <div className="tabbar-drag" />
+    <div className={`tabbar ${split ? 'projects-split' : ''}`} data-tauri-drag-region="deep">
+      <div className="tabbar-drag" data-tauri-drag-region />
       <div className="ptabs">
         {tabs.map((p, i) => (
-          <ProjectTab key={p.id} p={p} active={p.id === activeId} index={i} askColor={(q, r) => setColorFor({ id: q.id, x: r.left, y: r.bottom + 6 })} />
+          <ProjectTab key={p.id} p={p} active={p.id === activeId} index={i}
+            side={split?.[0] === p.id ? 'Izquierda' : split?.[1] === p.id ? 'Derecha' : undefined}
+            askColor={(q, r) => setColorFor({ id: q.id, x: r.left, y: r.bottom + 6 })} />
         ))}
         <button className="ptab-new" onClick={pickAndOpenProject} title="Abrir proyecto (⌘O)">
           <Icon.plus size={14} />
         </button>
       </div>
       <div className="tabbar-right">
-        {store && (
+        <button className={`tb-btn icon ${split ? 'on' : ''}`} disabled={openIds.length < 2} onClick={() => split ? unsplitProjects() : splitProjects()} title={split ? 'Cerrar vista dividida' : 'Dividir entre dos proyectos'} aria-label={split ? 'Cerrar vista dividida' : 'Dividir entre dos proyectos'}><Icon.split size={15} /></button>
+        {store && !split && (
           <ProjectProvider key={store.id} value={store}>
             <LayoutControls />
           </ProjectProvider>

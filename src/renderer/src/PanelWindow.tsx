@@ -31,7 +31,7 @@ export default function PanelWindow({ projectId, panel }: { projectId: string; p
   return (
     <ProjectProvider value={ps}>
       <div className="panelwin">
-        <div className="panelwin-bar">
+        <div className="panelwin-bar" data-tauri-drag-region="deep">
           <span className="panelwin-title">
             <b>{DOCK_NAMES[panel]}</b> <span className="muted">· {name}</span>
           </span>

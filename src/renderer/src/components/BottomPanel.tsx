@@ -16,13 +16,17 @@ function RunLog() {
   const selected = useStore((s) => s.logRun) ?? runs[0]?.id ?? null
   const run = runs.find((r) => r.id === selected)
   const [lines, setLines] = useState<RunLogLine[]>([])
-  const [filter, setFilter] = useState<'all' | 'stderr' | 'event'>('all')
+  const [filter, setFilter] = useState<'output' | 'all' | 'stderr' | 'event'>('output')
+  const items = useStore(s => run ? s.sessions[run.sessionId]?.items : undefined)
+  const [error, setError] = useState('')
   const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!selected) return setLines([])
     let alive = true
-    const load = () => api.runs.log(selected).then((l) => alive && setLines(l))
+    setLines([])
+    setError('')
+    const load = () => api.runs.log(selected).then((l) => { if (alive) { setLines(l); setError('') } }).catch(e => { if (alive) setError(String(e)) })
     load()
     const t = run?.status === 'running' ? setInterval(load, 1500) : undefined
     return () => {
@@ -32,8 +36,12 @@ function RunLog() {
   }, [selected, run?.status])
 
   useEffect(() => {
+    if (run && !items) void ps.loadMessages(run.sessionId)
+  }, [run?.sessionId, !!items])
+
+  useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight
-  }, [lines.length])
+  }, [lines.length, items])
 
   const shown = lines.filter((l) => filter === 'all' || l.stream === filter)
   return (
@@ -48,9 +56,9 @@ function RunLog() {
           {!runs.length && <option value="">Sin ejecuciones</option>}
         </select>
         <div className="seg">
-          {(['all', 'stderr', 'event'] as const).map((f) => (
+          {(['output', 'all', 'stderr', 'event'] as const).map((f) => (
             <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
-              {f === 'all' ? 'Todo' : f === 'stderr' ? 'stderr' : 'Eventos'}
+              {f === 'output' ? 'Salida' : f === 'all' ? 'Todo' : f === 'stderr' ? 'stderr' : 'Eventos'}
             </button>
           ))}
         </div>
@@ -62,14 +70,25 @@ function RunLog() {
         )}
       </div>
       <div className="runlog-lines mono" ref={box}>
-        {shown.map((l, i) => (
+        {error && <div role="status" className="muted small">No se pudo actualizar el registro: {error}</div>}
+        {filter === 'output' && <>
+          <p className="runlog-explanation">Salida comunicada por el agente. Algunos comandos acumulan su salida hasta terminar; este visor no es una terminal interactiva.</p>
+          {items?.filter(i => i.type === 'tool' && (i.at ?? 0) >= (run?.startedAt ?? 0) && (!run?.endedAt || (i.at ?? 0) <= run.endedAt)).map(i => i.type === 'tool' && <div className="runlog-command" key={i.id}>
+            <div className="runlog-command-head"><b>{i.name}</b><span>{i.status === 'running' ? 'En ejecución' : i.status === 'error' ? 'Falló' : 'Terminó'}</span></div>
+            <pre>{i.input}</pre>
+            <pre className="runlog-command-output">{i.output || (i.status === 'running' ? 'El agente todavía no ha comunicado salida de esta acción.' : 'Sin salida de texto.')}</pre>
+          </div>)}
+          {lines.filter(l => l.stream === 'stderr').map((l,i) => <div key={i} className="log-line log-stderr"><span className="log-time">{new Date(l.at).toLocaleTimeString()}</span><span className="log-text">{l.line}</span></div>)}
+          {run?.status === 'running' && <div className="runlog-waiting small muted">Esperando nueva salida · actualización automática cada 1,5 s. Puedes consultar los eventos técnicos en «Todo».</div>}
+        </>}
+        {filter !== 'output' && shown.map((l, i) => (
           <div key={i} className={`log-line log-${l.stream}`}>
             <span className="log-time">{new Date(l.at).toLocaleTimeString()}</span>
             <span className="log-stream">{l.stream}</span>
             <span className="log-text">{l.line}</span>
           </div>
         ))}
-        {!shown.length && <div className="muted small" style={{ padding: 10 }}>Sin líneas.</div>}
+        {filter !== 'output' && !shown.length && <div className="muted small" style={{ padding: 10 }}>Sin líneas.</div>}
       </div>
     </div>
   )

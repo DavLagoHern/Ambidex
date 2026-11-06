@@ -1,151 +1,14 @@
-import { isImagePath } from '@shared/images'
-import { ChatImage } from './ChatImage'
-import { useEffect, useRef, useState } from 'react'
-import Editor, { OnMount } from '@monaco-editor/react'
-import type { FileContent } from '@shared/types'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { attempt, confirmAsync, toast, useApp } from '../lib/app-store'
-import { monacoTheme } from '../lib/monaco'
+import { attempt, confirmAsync } from '../lib/app-store'
 import { Tab, usePS, useStore } from '../lib/project-store'
-import { errMsg, langFor, relPath } from '../lib/utils'
-import { CommitView } from './CommitView'
-import { DiffPane } from './DiffPane'
+import { relPath } from '../lib/utils'
 import { Icon } from './Icons'
 
-const EDITOR_OPTS = {
-  fontSize: 12.5,
-  lineHeight: 19,
-  fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
-  minimap: { enabled: false },
-  scrollBeyondLastLine: false,
-  automaticLayout: true,
-  smoothScrolling: true,
-  renderWhitespace: 'selection' as const,
-  padding: { top: 8 },
-  tabSize: 2
-}
-
-function FileEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' }>; visible: boolean }) {
-  const ps = usePS()
-  const theme = useApp((s) => s.theme)
-  const [file, setFile] = useState<FileContent | null>(null)
-  const [external, setExternal] = useState<string | null>(null)
-  const saved = useRef('')
-  const ed = useRef<Parameters<OnMount>[0] | null>(null)
-  const changed = useStore((s) => s.changed)
-
-  useEffect(() => {
-    api
-      .readFile(tab.path)
-      .then((r) => {
-        saved.current = r.content
-        setFile(r)
-      })
-      .catch((e) => setFile({ content: errMsg(e), binary: true, tooLarge: false }))
-  }, [tab.path])
-
-  // cambios en disco (un agente u otro programa): se recargan si no hay ediciones locales; si las hay, se avisa
-  useEffect(() => {
-    if (!changed.includes(tab.path) || !ed.current) return
-    api
-      .readFile(tab.path)
-      .then((r) => {
-        const model = ed.current?.getModel()
-        if (!model || r.content === model.getValue() || r.content === saved.current) return
-        if (ps.state.dirty[tab.path]) return setExternal(r.content)
-        saved.current = r.content
-        model.pushEditOperations([], [{ range: model.getFullModelRange(), text: r.content }], () => null)
-      })
-      .catch(() => {})
-  }, [changed])
-
-  useEffect(() => {
-    if (tab.line && ed.current) {
-      ed.current.revealLineInCenter(tab.line)
-      ed.current.setPosition({ lineNumber: tab.line, column: 1 })
-      ed.current.focus()
-    }
-  }, [tab.line, file])
-
-  useEffect(() => {
-    if (visible && ed.current) {
-      ps.editorRef.current = {
-        path: tab.path,
-        getSelection: () => {
-          const e = ed.current
-          const sel = e?.getSelection()
-          if (!e || !sel || sel.isEmpty()) return null
-          return { text: e.getModel()!.getValueInRange(sel), from: sel.startLineNumber, to: sel.endLineNumber }
-        }
-      }
-    }
-  }, [visible, file])
-
-  if (isImagePath(tab.path)) return <div className="image-editor" style={{ display: visible ? undefined : 'none' }}><ChatImage src={tab.path} alt={tab.path.split('/').pop()} /></div>
-  if (!file) return <div className="center-msg" style={{ display: visible ? undefined : 'none' }}>Cargando…</div>
-  if (file.binary || file.tooLarge)
-    return (
-      <div className="center-msg" style={{ display: visible ? undefined : 'none' }}>
-        {file.tooLarge ? 'Fichero demasiado grande para abrirlo aquí.' : file.content || 'Fichero binario.'}
-        <button className="btn" onClick={() => attempt(() => api.reveal(tab.path))}>
-          Mostrar en Finder
-        </button>
-      </div>
-    )
-
-  const save = async (v: string) => {
-    try {
-      await api.writeFile(tab.path, v)
-      saved.current = v
-      setExternal(null)
-      ps.setDirty(tab.path, false)
-      ps.refreshGit()
-    } catch (e) {
-      toast(errMsg(e), 'error')
-    }
-  }
-
-  return (
-    <div className="editor-host" style={{ display: visible ? undefined : 'none' }}>
-      {external !== null && (
-        <div className="editor-banner">
-          <Icon.warn size={14} /> El fichero ha cambiado en disco mientras lo editabas.
-          <button
-            className="btn small"
-            onClick={() => {
-              const model = ed.current?.getModel()
-              if (model) model.setValue(external)
-              saved.current = external
-              ps.setDirty(tab.path, false)
-              setExternal(null)
-            }}
-          >
-            Recargar del disco
-          </button>
-          <button className="btn ghost small" onClick={() => setExternal(null)}>
-            Mantener mis cambios
-          </button>
-        </div>
-      )}
-      <Editor
-        path={tab.path}
-        defaultValue={file.content}
-        language={langFor(tab.path)}
-        theme={monacoTheme(theme)}
-        options={EDITOR_OPTS}
-        onChange={(v) => ps.setDirty(tab.path, (v ?? '') !== saved.current)}
-        onMount={(editor, monaco) => {
-          ed.current = editor
-          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => save(editor.getValue()))
-          if (tab.line) {
-            editor.revealLineInCenter(tab.line)
-            editor.setPosition({ lineNumber: tab.line, column: 1 })
-          }
-        }}
-      />
-    </div>
-  )
-}
+// The welcome panel and chat do not need Monaco, its styles, or language workers.
+const FileEditor = lazy(() => import('./FileEditor').then(m => ({ default: m.FileEditor })))
+const CommitView = lazy(() => import('./CommitView').then(m => ({ default: m.CommitView })))
+const DiffPane = lazy(() => import('./DiffPane').then(m => ({ default: m.DiffPane })))
 
 // La vista inicial se adapta al panel, pero respeta la elección manual.
 function useDiffLayout() {
@@ -266,6 +129,79 @@ function EditorWelcome() {
   )
 }
 
+function EditorTabs({ close }: { close: (tab: Tab) => void }) {
+  const ps = usePS()
+  const tabs = useStore(s => s.tabs)
+  const active = useStore(s => s.activeTab)
+  const dirty = useStore(s => s.dirty)
+  const strip = useRef<HTMLDivElement>(null)
+  const [scroll, setScroll] = useState({ left: false, right: false })
+  const read = () => {
+    const el = strip.current
+    if (!el) return
+    const next = { left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 }
+    setScroll(old => old.left === next.left && old.right === next.right ? old : next)
+  }
+  const reveal = () => {
+    const el = strip.current
+    const selected = el?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (!el || !selected) return
+    if (selected.offsetLeft < el.scrollLeft) el.scrollLeft = selected.offsetLeft
+    else if (selected.offsetLeft + selected.offsetWidth > el.scrollLeft + el.clientWidth)
+      el.scrollLeft = selected.offsetLeft + selected.offsetWidth - el.clientWidth
+    read()
+  }
+  useLayoutEffect(reveal, [tabs, active])
+  useEffect(() => {
+    const el = strip.current
+    if (!el) return
+    const observer = new ResizeObserver(reveal)
+    observer.observe(el)
+    window.addEventListener('resize', reveal)
+    return () => { observer.disconnect(); window.removeEventListener('resize', reveal) }
+  }, [])
+  const move = (direction: number) => {
+    const el = strip.current
+    if (el) el.scrollLeft += direction * Math.max(100, el.clientWidth * .75)
+    read()
+  }
+  const choose = async () => {
+    const id = await attempt(() => api.contextMenu(tabs.map(t => ({
+      id: t.id, label: t.title, type: 'checkbox', checked: t.id === active
+    }))))
+    if (id) ps.set({ activeTab: id })
+  }
+  return <div className="editor-tabs">
+    <div className="tabs" ref={strip} role="tablist" aria-label="Archivos abiertos" onScroll={read}
+      onWheel={e => {
+        const el = strip.current
+        if (el && el.scrollWidth > el.clientWidth && !e.deltaX && e.deltaY) {
+          el.scrollLeft += e.deltaY
+          e.preventDefault()
+        }
+      }}>
+      {tabs.map(t => <div key={t.id} role="tab" aria-selected={t.id === active}
+        className={`tab ${t.id === active ? 'active' : ''} tab-${t.kind}`}
+        onClick={() => ps.set({ activeTab: t.id })} onMouseDown={e => e.button === 1 && close(t)}
+        title={t.kind === 'file' ? t.path : t.kind === 'commit' ? t.hash : t.rel}>
+        {(t.kind === 'diff' || t.kind === 'refdiff') && <Icon.compare size={12} className="tab-kind" />}
+        {t.kind === 'commit' && <Icon.history size={12} className="tab-kind" />}
+        {t.kind === 'file' && <Icon.file size={12} className="tab-kind muted" />}
+        <span className="ellipsis">{t.title}</span>
+        <span className={t.kind === 'file' && dirty[t.path] ? 'dirty-dot' : 'tab-close'}
+          role="button" aria-label={`Cerrar ${t.title}`} onClick={e => { e.stopPropagation(); close(t) }}>
+          {t.kind === 'file' && dirty[t.path] ? '●' : <Icon.x size={12} />}
+        </span>
+      </div>)}
+    </div>
+    {tabs.length > 1 && <div className="editor-tab-actions">
+      <button className="icon-btn" title="Desplazar pestañas a la izquierda" disabled={!scroll.left} onClick={() => move(-1)}><Icon.back size={13} /></button>
+      <button className="icon-btn" title="Desplazar pestañas a la derecha" disabled={!scroll.right} onClick={() => move(1)}><Icon.chevronRight size={13} /></button>
+      <button className="icon-btn" title="Ver todas las pestañas abiertas" onClick={choose}><Icon.chevronDown size={13} /></button>
+    </div>}
+  </div>
+}
+
 export function EditorArea() {
   const ps = usePS()
   const tabs = useStore((s) => s.tabs)
@@ -297,35 +233,10 @@ export function EditorArea() {
 
   return (
     <div className="editor-area">
-      {tabs.length > 0 && (
-        <div className="tabs">
-          {tabs.map((t) => (
-            <div
-              key={t.id}
-              className={`tab ${t.id === activeTab ? 'active' : ''} tab-${t.kind}`}
-              onClick={() => ps.set({ activeTab: t.id })}
-              onMouseDown={(e) => e.button === 1 && tryClose(t)}
-              title={t.kind === 'file' ? t.path : t.kind === 'commit' ? t.hash : t.rel}
-            >
-              {(t.kind === 'diff' || t.kind === 'refdiff') && <Icon.compare size={12} className="tab-kind" />}
-              {t.kind === 'commit' && <Icon.history size={12} className="tab-kind" />}
-              {t.kind === 'file' && <Icon.file size={12} className="tab-kind muted" />}
-              <span className="ellipsis">{t.title}</span>
-              {t.kind === 'file' && dirty[t.path] ? (
-                <span className="dirty-dot" onClick={(e) => (e.stopPropagation(), tryClose(t))}>
-                  ●
-                </span>
-              ) : (
-                <span className="tab-close" onClick={(e) => (e.stopPropagation(), tryClose(t))}>
-                  <Icon.x size={12} />
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {tabs.length > 0 && <EditorTabs close={tryClose} />}
       {active?.kind === 'file' && <div className="breadcrumb mono">{relPath(ws, active.path).split('/').join(' › ')}</div>}
       <div className="editor-content">
+        <Suspense fallback={<div className="center-msg muted">Cargando editor…</div>}>
         {tabs
           .filter((t): t is Extract<Tab, { kind: 'file' }> => t.kind === 'file')
           .map((t) => (
@@ -335,6 +246,7 @@ export function EditorArea() {
         {active?.kind === 'commit' && <CommitView key={active.id} cwd={active.cwd} hash={active.hash} />}
         {active?.kind === 'refdiff' && <RefDiffView key={active.id} tab={active} />}
         {!active && <EditorWelcome />}
+        </Suspense>
       </div>
     </div>
   )

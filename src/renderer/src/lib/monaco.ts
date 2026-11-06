@@ -49,12 +49,12 @@ monaco.editor.defineTheme('ambidex-dark', {
     'editorWidget.border': '#2f323b',
     'scrollbarSlider.background': '#ffffff14',
     'scrollbarSlider.hoverBackground': '#ffffff24',
-    'diffEditor.insertedTextBackground': '#3fb98a70',
-    'diffEditor.removedTextBackground': '#f0616d70',
-    'diffEditor.insertedLineBackground': '#3fb98a38',
-    'diffEditor.removedLineBackground': '#f0616d38',
-    'diffEditorGutter.insertedLineBackground': '#3fb98a38',
-    'diffEditorGutter.removedLineBackground': '#f0616d38'
+    'diffEditor.insertedTextBackground': '#3fb98a28',
+    'diffEditor.removedTextBackground': '#f0616d28',
+    'diffEditor.insertedLineBackground': '#3fb98a12',
+    'diffEditor.removedLineBackground': '#f0616d12',
+    'diffEditorGutter.insertedLineBackground': '#3fb98a20',
+    'diffEditorGutter.removedLineBackground': '#f0616d20'
   }
 })
 
@@ -77,12 +77,12 @@ monaco.editor.defineTheme('ambidex-light', {
     'editorLineNumber.activeForeground': '#50535c',
     'editor.selectionBackground': '#6d5ce830',
     'editorCursor.foreground': '#6d5ce8',
-    'diffEditor.insertedTextBackground': '#138a6255',
-    'diffEditor.removedTextBackground': '#d7364455',
-    'diffEditor.insertedLineBackground': '#138a6228',
-    'diffEditor.removedLineBackground': '#d7364428',
-    'diffEditorGutter.insertedLineBackground': '#138a6228',
-    'diffEditorGutter.removedLineBackground': '#d7364428'
+    'diffEditor.insertedTextBackground': '#138a6224',
+    'diffEditor.removedTextBackground': '#d7364424',
+    'diffEditor.insertedLineBackground': '#138a6210',
+    'diffEditor.removedLineBackground': '#d7364410',
+    'diffEditorGutter.insertedLineBackground': '#138a621c',
+    'diffEditorGutter.removedLineBackground': '#d736441c'
   }
 })
 

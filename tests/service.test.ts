@@ -113,6 +113,8 @@ describe('SessionService', () => {
     const uiItems = new Map<string, unknown>()
     for (const p of pushed) if (p.channel === 'session:items') for (const it of (p.payload as PushContract['session:items']).items) uiItems.set(it.id, it)
     expect([...uiItems.values()]).toEqual(items)
+    const signals = pushed.filter(p => p.channel === 'run:status').map(p => p.payload as PushContract['run:status'])
+    expect(signals.some(r => r.status === 'running' && !!r.lastActivityAt && r.lastActivityAt >= r.startedAt)).toBe(true)
     const lastMeta = pushed.filter((p) => p.channel === 'session:meta').at(-1)!.payload as PushContract['session:meta']
     expect(lastMeta.running).toBe(false)
     expect(finished).toEqual(['completed'])

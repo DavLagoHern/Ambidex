@@ -1,4 +1,4 @@
-// Firma el .app (necesaria en Apple Silicon tras modificar el bundle de Electron).
+// Firma el .app (necesaria en Apple Silicon tras modificar el bundle nativo).
 // Con firma ad hoc el «requisito designado» es el hash del binario, que cambia en cada build, y macOS vuelve a
 // pedir acceso a Documentos tras cada instalación. Si hay una identidad de firma en el llavero (o se indica con
 // AMBIDEX_SIGN_IDENTITY) se usa esa: el requisito queda estable y el permiso se concede una sola vez.
@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const app = resolve('dist/mac-arm64/Ambidex.app')
+const app = resolve('src-tauri/target/release/bundle/macos/Ambidex.app')
 if (!existsSync(app)) {
   console.error(`No existe ${app}`)
   process.exit(1)

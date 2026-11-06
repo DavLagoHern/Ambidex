@@ -83,9 +83,27 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(s.asked.at(-1)?.text).toBe('refactoriza todo el módulo')
   })
 
+  it('uses powerful models above 80% weekly remaining without raising effort', async () => {
+    const s = setup(() => ({ category: 'implement', tier: 'easy', tierConfidence: 1 }))
+    for (const agent of ['claude', 'codex'] as const) {
+      s.store.saveLimits({ agent, updatedAt: Date.now(), windows: [{ label: 'Semana', usedPercent: 19, resetsAt: Date.now() / 1000 + 86400 }] })
+      const t = s.dispatcher.createThread(s.project.id)
+      const r = await s.dispatcher.sendThread(t.id, 'Retoca el botón', { agent })
+      expect(r.decision?.model).toBe(agent === 'claude' ? 'claude-opus-5-5' : 'gpt-6.1-sol')
+      expect(r.decision?.effort).toBe('medium')
+      expect(r.decision?.reason).toContain('cuota semanal disponible 81 %')
+    }
+    s.store.saveLimits({ agent: 'codex', updatedAt: Date.now(), windows: [{ label: 'Semana', usedPercent: 20 }] })
+    const t = s.dispatcher.createThread(s.project.id)
+    expect((await s.dispatcher.sendThread(t.id, 'Retoca el botón', { agent: 'codex' })).decision?.model).toBe('gpt-6.1-terra')
+    s.store.saveLimits({ agent: 'claude', updatedAt: Date.now(), windows: [{ label: 'Semana', usedPercent: 1 }, { label: 'Semana Opus', usedPercent: 50 }] })
+    expect((await s.dispatcher.sendThread(t.id, 'Retoca el botón', { agent: 'claude' })).decision?.model).toBe('claude-sonnet-5-5')
+  })
+
   it('manda el modelo que fijes en la conversación, también antes de que exista', async () => {
     const s = setup()
     const t = s.dispatcher.createThread(s.project.id)
+    s.store.saveLimits({ agent: 'claude', updatedAt: Date.now(), windows: [{ label: 'Semana', usedPercent: 1 }] })
     const r1 = await s.dispatcher.sendThread(t.id, 'Diseña la arquitectura', { models: { claude: 'claude-haiku-5-5' } })
     expect(r1.decision).toMatchObject({ agent: 'claude', model: 'claude-haiku-5-5' })
     expect(r1.decision?.reason).toContain('fijado')

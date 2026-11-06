@@ -33,21 +33,38 @@ function FileRow({
   // abierto a la derecha: es la pestaña activa y es el diff de este fichero
   const open = useStore((s) => s.activeTab === `diff:${staged ? 'staged' : 'unstaged'}:${cwd}:${f.path}`)
   return (
-    <div className={`file-row ${open ? 'active' : ''}`} onClick={onOpen} title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}>
+    <div className={`file-row ${open ? 'active' : ''}`} onClick={onOpen} title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}
+      onContextMenu={async e => {
+        e.preventDefault()
+        const action = await api.contextMenu([
+          { id: 'review', label: 'Ver cambios' },
+          { id: 'open', label: 'Abrir fichero' },
+          ...(onStage ? [{ id: 'stage', label: 'Preparar (stage)' }] : []),
+          ...(onUnstage ? [{ id: 'unstage', label: 'Quitar del stage' }] : []),
+          ...(onDiscard ? [{ id: 'discard', label: 'Descartar cambios' }] : [])
+        ])
+        if (action === 'review') onOpen()
+        if (action === 'open') ps.openFile(`${cwd}/${f.path}`)
+        if (action === 'stage') onStage?.()
+        if (action === 'unstage') onUnstage?.()
+        if (action === 'discard') onDiscard?.()
+      }}>
       <span className={`file-name ellipsis ${code === 'D' ? 'deleted' : ''}`}>
-        {basename(f.path)} <span className="muted small">{dirname(f.path)}</span>
+        <span className="file-base">{basename(f.path)}</span>
+        <span className="file-dir muted small">{dirname(f.path)}</span>
       </span>
       {stats && (stats[0] > 0 || stats[1] > 0) && (
-        <span className="small">
-          <span className="add">+{stats[0]}</span> <span className="del">−{stats[1]}</span>
+        <span className="file-stats small" title={`${stats[0]} líneas añadidas, ${stats[1]} eliminadas`}>
+          {stats[0] > 0 && <span className="add">+{stats[0]}</span>}
+          {stats[1] > 0 && <span className="del">−{stats[1]}</span>}
         </span>
       )}
       <span className="row-actions" onClick={(e) => e.stopPropagation()}>
-        <button className="icon-btn" title="Abrir fichero" onClick={() => ps.openFile(`${cwd}/${f.path}`)}>
+        <button className="icon-btn file-secondary-action" title="Abrir fichero" onClick={() => ps.openFile(`${cwd}/${f.path}`)}>
           <Icon.file size={13} />
         </button>
         {onDiscard && (
-          <button className="icon-btn" title="Descartar cambios" onClick={onDiscard}>
+          <button className="icon-btn file-secondary-action" title="Descartar cambios" onClick={onDiscard}>
             <Icon.undo size={13} />
           </button>
         )}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fetchAccountLimits, parseAccountLimits } from '../src/main/agents/usage-limits'
+import { consumeResetCredit, fetchAccountLimits, parseAccountLimits } from '../src/main/agents/usage-limits'
 import { parseRolloutLimits } from '../src/main/agents/codex'
 
 const dirs: string[] = []
@@ -23,6 +23,30 @@ describe('uso de la cuenta de Codex', () => {
   })
   it('no inventa un cero cuando no hay cuota', () => {
     expect(() => parseAccountLimits({ rateLimits: { primary: { usedPercent: null } } })).toThrow('no ha devuelto')
+  })
+  it('conserva el contador autoritativo aunque la lista de reinicios esté recortada', () => {
+    const result = parseAccountLimits({ rateLimits: bucket, rateLimitResetCredits: { availableCount: 3, credits: [
+      { id: 'credit-1', resetType: 'codexRateLimits', status: 'available', title: 'Reward', expiresAt: 123 },
+      { id: 'used', resetType: 'codexRateLimits', status: 'redeemed' }
+    ] } })
+    expect(result.resetCredits).toEqual({ availableCount: 3, credits: [{ id: 'credit-1', title: 'Reward', expiresAt: 123 }] })
+    expect(parseAccountLimits({ rateLimits: bucket, rateLimitResetCredits: { availableCount: 2, credits: null } }).resetCredits).toEqual({ availableCount: 2 })
+    expect(parseAccountLimits({ rateLimits: bucket }).resetCredits).toBeUndefined()
+  })
+  it.each(['reset', 'alreadyRedeemed', 'nothingToReset', 'noCredit'] as const)('canje explícito: %s, con clave de idempotencia y sin turnos', async outcome => {
+    const key = '8ae96ff3-3425-4f4c-8772-b6fd61502868'
+    const { bin, dir } = fakeCli(`require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+      const d = JSON.parse(line);
+      if(d.method === 'initialized') return;
+      if(d.method === 'initialize') return console.log(JSON.stringify({id:d.id,result:{}}));
+      if(d.method !== 'account/rateLimitResetCredit/consume' || d.params.idempotencyKey !== '${key}')
+        return console.log(JSON.stringify({id:d.id,error:{message:'RPC inesperado'}}));
+      console.log(JSON.stringify({id:d.id,result:{outcome:'${outcome}'}}));
+    });`)
+    expect(await consumeResetCredit(bin, dir, process.env, key)).toBe(outcome)
+  })
+  it('rechaza claves inválidas antes de abrir el proceso', async () => {
+    await expect(consumeResetCredit('/no-existe', '/', {}, '')).rejects.toThrow('inválido')
   })
   it('fecha el dato de sesión con el evento y no con la última escritura del archivo', () => {
     const text = JSON.stringify({ timestamp: '2026-11-03T10:00:00Z', payload: { rate_limits: { primary: { used_percent: 61, window_minutes: 10080 } } } })

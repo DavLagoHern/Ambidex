@@ -2,7 +2,7 @@ import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentId, AgentModel, ChatItem, ModelTier, QueuedMessage, RouteDecision, SessionMeta, Settings, ThreadMeta } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY, DEFAULT_ROUTE_PREFS } from '@shared/types'
 import { titleFromPrompt } from '@shared/chat'
-import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, analyzeRoutePrompt, pickEffort, pickModel, requestsComputerControl, requestsImageGeneration, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
+import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, analyzeRoutePrompt, pickEffort, pickModel, weeklyHeadroom, requestsComputerControl, requestsImageGeneration, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
 import type { Store } from '../db/store'
 import type { SessionService } from './service'
 
@@ -222,14 +222,16 @@ export class Dispatcher {
     let out = d
     if (this.policy().auto) {
       const pinned = session?.model || pins?.models?.[d.agent]
-      const pick = pinned ? undefined : pickModel(d.agent, cls?.tier, this.policy(), models?.length ? models.map((m) => m.id) : undefined, cls?.tierConfidence)
+      const remaining = weeklyHeadroom(this.d.store.getLimits()[d.agent])
+      const abundant = remaining !== undefined && remaining > 80
+      const pick = pinned ? undefined : pickModel(d.agent, abundant ? 'hard' : cls?.tier, this.policy(), models?.length ? models.map((m) => m.id) : undefined, abundant ? 1 : cls?.tierConfidence)
       if (pinned) out = { ...out, model: pinned, reason: `${out.reason} · ${label(pinned)} (fijado en la conversación)` }
       else if (pick)
         out = {
           ...out,
           model: pick.model,
           tier: pick.tier,
-          reason: `${out.reason} · ${label(pick.model)} (${pick.guessed ? (cls?.tier ? `tarea ${TIER_LABELS[cls.tier]}${pct(cls.tierConfidence)}, poco segura` : 'dificultad sin estimar') : `tarea ${TIER_LABELS[pick.tier]}${pct(cls?.tierConfidence)}`})`
+          reason: `${out.reason} · ${label(pick.model)} (${abundant ? `cuota semanal disponible ${Math.round(remaining!)} %` : pick.guessed ? (cls?.tier ? `tarea ${TIER_LABELS[cls.tier]}${pct(cls.tierConfidence)}, poco segura` : 'dificultad sin estimar') : `tarea ${TIER_LABELS[pick.tier]}${pct(cls?.tierConfidence)}`})`
         }
     }
     if (cls?.tierConfidence !== undefined) out = { ...out, tierConfidence: cls.tierConfidence }

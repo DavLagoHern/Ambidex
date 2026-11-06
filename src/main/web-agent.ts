@@ -1,4 +1,18 @@
-import type { WebContents } from 'electron'
+// Structural browser adapter shared by the headless engine and native WebKit host.
+export interface WebContents {
+  id: number
+  isDestroyed(): boolean
+  isLoading(): boolean
+  getURL(): string
+  loadURL(url: string): Promise<void>
+  executeJavaScript(script: string, gesture?: boolean): Promise<any>
+  sendInputEvent(event: Record<string, unknown>): void
+  insertText(text: string): Promise<any>
+  on(event: string, fn: () => void): unknown
+  off(event: string, fn: () => void): unknown
+  navigationHistory: { canGoBack(): boolean; goBack(): void }
+  capturePage(): Promise<{ isEmpty(): boolean; getSize(): { width: number }; resize(opts: unknown): { toPNG(): Buffer }; toPNG(): Buffer }>
+}
 import type { AgentId, WebIssue } from '@shared/types'
 import { isWebUrl, normalizeAddress } from '@shared/web'
 import { McpContent, McpServer, McpTool, ToolError } from './mcp-server'

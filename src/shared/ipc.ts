@@ -1,5 +1,5 @@
 import type {
-  AgentId, AgentInfo, AgentLimits, AppInfo, AppUpdate, ChatItem, CliUpdate, JevStatus, JevTest, CommitDetail, DevScript, DirEntry, Extensions, ExternalSession, FileContent, GitBranch, GitCommit, GitLogEntry,
+  AgentId, AgentInfo, AgentLimits, ResetCreditOutcome, AppInfo, AppUpdate, ChatItem, CliUpdate, JevStatus, JevTest, CommitDetail, DevScript, DirEntry, Extensions, ExternalSession, FileContent, GitBranch, GitCommit, GitLogEntry,
   GitStatus, GitWorktree, GrepHit, NativeMenuItem, ProjectMeta, ProjectPatch, QueuedMessage, RouteDecision, RunInfo, RunLogLine,
   SearchHit, SessionCreate, SessionMeta, SessionPatch, Settings, ThreadMeta, UndoFile, WebIssue
 } from './types'
@@ -8,6 +8,7 @@ import type { FileChange, OrchStart, Orchestration, PlanTask } from './orchestra
 // Contrato de las llamadas renderer → proceso principal. El preload expone un único `invoke`
 // y ambos lados se tipan contra esta interfaz.
 export interface IpcContract {
+  'app:ready': () => void
   'app:info': () => AppInfo
   'app:pickFolder': () => string | null
   'app:reveal': (path: string) => void
@@ -61,6 +62,7 @@ export interface IpcContract {
 
   'agents:info': (refresh: boolean) => AgentInfo[]
   'agents:limits': (refresh?: boolean) => Partial<Record<AgentId, AgentLimits>>
+  'agents:resetCredit': (idempotencyKey: string) => ResetCreditOutcome | null
   'agents:oneShot': (agent: AgentId, cwd: string, prompt: string, stdin: string, model?: string) => string
   // versiones nuevas de los CLI: estado, comprobar ahora (instala si está activado) e instalar ya la de un agente
   'cli:updates': () => CliUpdate[]

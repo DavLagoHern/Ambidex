@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from 'react'
 import type { AgentId, AgentInfo, AgentLimits, AppUpdate, CliUpdate, ProjectMeta, ProjectPatch, Settings, JevStatus } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
-import { api, on } from './api'
+import { api, invoke, on } from './api'
 import { ProjectStore, WINDOW_ID } from './project-store'
 import { errMsg, uid } from './utils'
+import { selectSplitProject, splitWithProject, type ProjectSplit } from '@shared/project-split'
 
 export type Overlay = 'palette' | 'files' | 'projects' | 'settings' | 'gitOutput' | null
 
@@ -24,6 +25,7 @@ export interface AppState {
   projects: ProjectMeta[]
   openIds: string[]
   activeId: string | null
+  projectSplit: ProjectSplit
   // proyectos cuyo espacio de trabajo ya se ha montado (se mantienen vivos al cambiar de pestaña)
   mounted: string[]
   settings: Settings | null
@@ -58,6 +60,7 @@ let state: AppState = {
   projects: [],
   openIds: [],
   activeId: null,
+  projectSplit: null,
   mounted: [],
   settings: null,
   theme: 'dark',
@@ -222,9 +225,25 @@ export function activate(id: string) {
   const meta = state.projects.find((p) => p.id === id)
   if (!meta) return
   ensureStore(meta)
-  setApp((s) => ({ activeId: id, mounted: s.mounted.includes(id) ? s.mounted : [...s.mounted, id], finished: seen(s.finished, id) }))
+  if (state.activeId === id && state.mounted.includes(id)) return
+  setApp((s) => ({ activeId: id, projectSplit: selectSplitProject(s.projectSplit, s.activeId, id), mounted: s.mounted.includes(id) ? s.mounted : [...s.mounted, id], finished: seen(s.finished, id) }))
   clearTimeout(saveActiveTimer)
   saveActiveTimer = setTimeout(() => api.saveSettings({ activeProjectId: id }).then((settings) => setApp({ settings })), 400)
+}
+
+export function splitProjects(target?: string) {
+  const pair = splitWithProject(state.openIds, state.activeId, target)
+  if (!pair) return
+  for (const id of pair) {
+    const meta = state.projects.find(p => p.id === id)
+    if (meta) ensureStore(meta)
+  }
+  setApp(s => ({ projectSplit: pair, mounted: [...new Set([...s.mounted, ...pair])] }))
+}
+
+export function unsplitProjects(keep = state.activeId) {
+  setApp({ projectSplit: null })
+  if (keep) activate(keep)
 }
 
 export async function openProjectPath(path: string) {
@@ -253,11 +272,13 @@ export async function closeProject(id: string) {
   setApp((s) => {
     const idx = s.openIds.indexOf(id)
     const openIds = s.openIds.filter((x) => x !== id)
-    const activeId = s.activeId === id ? (openIds[Math.min(idx, openIds.length - 1)] ?? null) : s.activeId
+    const remaining = s.projectSplit?.find(x => x !== id)
+    const activeId = s.activeId === id ? (s.projectSplit?.includes(id) ? remaining ?? null : openIds[Math.min(idx, openIds.length - 1)] ?? null) : s.activeId
     return {
       openIds,
       mounted: s.mounted.filter((x) => x !== id),
       activeId,
+      projectSplit: s.projectSplit?.includes(id) ? null : s.projectSplit,
       projects: s.projects.map((p) => (p.id === id ? { ...p, isOpen: false } : p))
     }
   })
@@ -374,6 +395,7 @@ export async function initApp(runCommand: (cmd: string) => void) {
   on('menu', ({ command }) => runCommand(command))
   on('cli:update', (u) => u.state === 'updated' && toast(`${AGENT_NAMES[u.agent]} actualizado a la ${u.installed}`, 'success'))
   on('open-path', ({ path }) => openProjectPath(path))
+  await invoke('app:ready')
   on('focus-project', ({ projectId, sessionId }) => {
     activate(projectId)
     if (sessionId) setTimeout(() => stores.get(projectId)?.focusSession(sessionId), 50)

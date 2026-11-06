@@ -38,7 +38,8 @@ const EFFORT_LABELS: Record<string, string> = {
 
 // ---------- elementos del chat ----------
 
-function ToolRow({ item, cwd }: { item: Extract<ChatItem, { type: 'tool' }>; cwd: string }) {
+function ToolRow({ item, cwd, sessionId }: { item: Extract<ChatItem, { type: 'tool' }>; cwd: string; sessionId: string }) {
+  const ps = usePS()
   const [open, setOpen] = useState<boolean | null>(null)
   const input = item.input.split(cwd + '/').join('')
   const images = [...new Set([...(item.images ?? []), ...toolImages(item.output), ...(/^(Read|view_image|.*image.*)$/i.test(item.name) ? toolImages(item.input) : [])])]
@@ -56,6 +57,10 @@ function ToolRow({ item, cwd }: { item: Extract<ChatItem, { type: 'tool' }>; cwd
         </span>
         {expandable && <Icon.chevronRight size={12} className="tool-chevron" />}
       </button>
+      {item.status === 'running' && <button className="btn ghost small tool-live-output" onClick={() => {
+        const run = ps.state.runs.find(r => r.sessionId === sessionId && r.status === 'running')
+        if (run) ps.set(s => ({ bottomTab: 'log', logRun: run.id, panels: { ...s.panels, bottom: true } }))
+      }}><Icon.terminal size={12} /> Ver salida</button>}
       {expanded && images.length > 0 && <div className="tool-images">{images.map(src => <ChatImage key={src} src={src} />)}</div>}
       {expanded && item.output && <pre className="tool-output">{item.output}</pre>}
     </div>
@@ -271,7 +276,7 @@ export const Item = memo(function Item({ item, session }: { item: ChatItem; sess
     case 'thinking':
       return <Thinking text={item.text} />
     case 'tool':
-      return <ToolRow item={item} cwd={session.cwd} />
+      return <ToolRow item={item} cwd={session.cwd} sessionId={session.id} />
     case 'files':
       return (
         <div className="files-card">
@@ -399,8 +404,12 @@ export function Working({ session }: { session: SessionView }) {
   const ps = usePS()
   const run = useStore((s) => s.runs.find((r) => r.sessionId === session.id && r.status === 'running'))
   const lastTool = session.items?.findLast?.((i) => i.type === 'tool') as Extract<ChatItem, { type: 'tool' }> | undefined
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
+  const lastSignal = run?.lastActivityAt ?? run?.startedAt
+  const quiet = !!lastSignal && now - lastSignal > 90_000
   return (
-    <div className="working">
+    <div className={`working ${quiet ? 'quiet' : ''}`}>
       <span className={`pulse agent-${session.agent}`} />
       <span>{lastTool?.status === 'running' ? `${toolName(lastTool.name)}…` : `${AGENT_NAMES[session.agent]} está trabajando…`}</span>
       {run && (
@@ -408,6 +417,9 @@ export function Working({ session }: { session: SessionView }) {
           · <Elapsed since={run.startedAt} />
         </span>
       )}
+      {lastTool?.status === 'running' && lastTool.at && <span className="muted">Acción: {durationText(now - lastTool.at)}</span>}
+      {quiet && <span className="working-quiet" role="status" title="El proceso no ha terminado, pero sin salida nueva no se puede confirmar si está avanzando.">Sin salida nueva desde hace {durationText(now - lastSignal!)}</span>}
+      {run && <button className="btn ghost small working-output" onClick={() => ps.set(s => ({ bottomTab: 'log', logRun: run.id, panels: { ...s.panels, bottom: true } }))}><Icon.terminal size={11} /> Ver salida</button>}
       <button className="btn ghost small" onClick={() => ps.cancelSession(session.id)}>
         <Icon.stop size={11} /> Detener
       </button>
@@ -646,8 +658,19 @@ export function useComposerInsert(ta: RefObject<HTMLTextAreaElement>, setText: (
         el.scrollTop = el.scrollHeight
       })
     }
+    const nativeDrop = (event: Event) => {
+      const d = (event as CustomEvent<{ claimed: boolean; x: number; y: number; images: Attachment[]; files: { path: string; isDir: boolean }[] }>).detail
+      const el = ta.current
+      if (d.claimed || !el?.offsetParent) return
+      const target = document.elementFromPoint(d.x, d.y)
+      if (!target || !el.parentElement?.parentElement?.contains(target)) return
+      d.claimed = true
+      const refs = d.files.map(f => '@' + relPath(ps.state.workspace, f.path)).join(' ')
+      onInsert(new CustomEvent('composer-insert', { detail: { projectId: ps.id, claimed: false, text: refs || undefined, images: d.images } }))
+    }
     window.addEventListener('composer-insert', onInsert)
-    return () => window.removeEventListener('composer-insert', onInsert)
+    window.addEventListener('native-drop', nativeDrop)
+    return () => { window.removeEventListener('composer-insert', onInsert); window.removeEventListener('native-drop', nativeDrop) }
   }, [ps])
 }
 

@@ -118,6 +118,7 @@ function SessionHeader({ agent, session, compact }: { agent: AgentId; session?: 
           onClick={() => setOpen(!open)}
           title={t && t.turns ? `${t.turns} turnos · ${fmtTokens(t.input)} entrada · ${fmtTokens(t.output)} salida · ${fmtTokens(t.cached)} caché` : undefined}
         >
+          {session?.running && <span className="conversation-loading" role="img" aria-label="Agente trabajando" title="El agente sigue trabajando"><Icon.spinner size={12} className="spin" /></span>}
           <span className="ellipsis">{session?.title ?? (compact ? AGENT_NAMES[agent] : 'Nueva conversación')}</span>
           <Icon.chevronDown size={12} />
         </button>
@@ -132,8 +133,8 @@ function SessionHeader({ agent, session, compact }: { agent: AgentId; session?: 
             <div className="menu-scroll">
               {list.map((s) => (
                 <div key={s.id} className={`menu-item ${s.id === session?.id ? 'selected' : ''}`} onClick={() => (setOpen(false), ps.focusSession(s.id))}>
-                  <span className="ellipsis">
-                    {s.running && <Icon.spinner size={12} className="spin" />} {s.title}
+                  <span className="conversation-title">
+                    {s.running && <span className="conversation-loading" role="img" aria-label="Agente trabajando" title="El agente sigue trabajando"><Icon.spinner size={12} className="spin" /></span>} <span className="ellipsis">{s.title}</span>
                     {s.worktree && <span className="badge accent">{s.worktree.branch}</span>}
                   </span>
                   <span className="muted small">{timeAgo(s.updatedAt / 1000)}</span>

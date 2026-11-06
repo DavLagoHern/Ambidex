@@ -36,6 +36,8 @@ export interface ServiceDeps {
 }
 
 interface ActiveRun {
+  lastActivityAt?: number
+  activitySentAt?: number
   id: string
   sessionId: string
   projectId: string
@@ -228,12 +230,14 @@ export class SessionService {
       const processSpec: ProcessSpec = { bin: spec.bin, args: spec.args, cwd: spec.cwd, stdin: spec.stdin, keepOpen: spec.keepOpen, env: { ...this.d.env(), ...spec.env } }
       const handlers: ProcessHandlers = {
         onStdout: (line) => {
+          this.activity(run)
           if (!line.includes('"content_block_delta"')) store.appendLog(runId, 'event', line)
           for (const ev of parser.onLine(line)) this.apply(run, ev)
           // EOF conserva los mensajes ya escritos; Claude los consume antes de salir.
           if (spec.keepOpen && adapter.turnEnded?.(line)) run.proc?.endInput()
         },
         onStderr: (line) => {
+          this.activity(run)
           store.appendLog(runId, 'stderr', line)
           if (!adapter.isNoise(line)) run.stderrTail = (run.stderrTail + line + '\n').slice(-4000)
         }
@@ -449,9 +453,17 @@ export class SessionService {
       agent: run.agent,
       status,
       startedAt: run.startedAt,
+      lastActivityAt: run.lastActivityAt,
       pid: run.proc?.pid,
       sessionTitle: this.d.store.getSession(run.sessionId)?.title
     }
+  }
+
+  private activity(run: ActiveRun) {
+    run.lastActivityAt = Date.now()
+    if (run.lastActivityAt - (run.activitySentAt ?? 0) < 1000) return
+    run.activitySentAt = run.lastActivityAt
+    this.d.push('run:status', this.runInfo(run, 'running'))
   }
 
   private pushMeta(sessionId: string): SessionMeta | undefined {

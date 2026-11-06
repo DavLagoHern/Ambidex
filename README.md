@@ -10,6 +10,8 @@ Ambidex is a macOS desktop app for building software with **Claude Code** and **
 
 > **Early project.** macOS on Apple Silicon only, and the interface is in Spanish for now (English is planned).
 
+> **Tauri 2 / Rust migration:** windows, PTYs, files and the WebKit viewer now use the Rust host. Agents, SQLite, Git and orchestration still run in one Node 24+ compatibility process. This is a hybrid migration; a complete Rust engine port remains pending. [Architecture, requirements and tests](docs/TAURI_MIGRATION.md).
+
 ## Highlights
 
 - **One chat, two agents.** Each message goes to the agent best suited to it, based on:
@@ -39,15 +41,15 @@ Ambidex is a macOS desktop app for building software with **Claude Code** and **
 ## Install from source
 
 Requirements:
-- macOS on Apple Silicon
-- Node 22.15+ (24 recommended)
+- macOS 14+ on Apple Silicon
+- Node 24+ and Rust stable (with Xcode command line tools)
 - Git
 - [Claude Code](https://code.claude.com) and/or [Codex CLI](https://github.com/openai/codex), installed and signed in
 
 ```bash
 git clone https://github.com/DavLagoHern/Ambidex.git
 cd Ambidex
-npm install            # dependencies + node-pty built for Electron
+npm install            # frontend dependencies + Tauri CLI
 npm run dist           # builds and packages Ambidex.app (signed with your keychain identity, or ad hoc)
 npm run install:app    # copies it to /Applications, adds a Desktop shortcut and opens it
 ```
@@ -90,9 +92,10 @@ Check both before relying on Ambidex for heavy use.
 
 ```bash
 npm run typecheck
-npm test                                # 121 unit tests, no quota used
-npm run build && npm run test:e2e       # end-to-end with the real CLIs (a few short messages)
-E2E_SKIP_AGENTS=1 npm run test:e2e      # end-to-end without calling the agents
+npm run test:native
+npm run build:assets
+npm test                                # 187 unit tests, no quota used
+cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml && npm run test:e2e       # native integration tests with simulated CLIs (no quota)
 ```
 
 The CLI adapters are tested against output captured from Claude Code 2.1.316 and Codex 0.155.1.
@@ -107,7 +110,7 @@ The CLI adapters are tested against output captured from Claude Code 2.1.316 and
 
 ## Credits
 
-[Jev](https://github.com/feder-cr/jev) (MIT) for local routing decisions. Built with Electron, React, Monaco, xterm.js, node-pty and Lucide.
+[Jev](https://github.com/feder-cr/jev) (MIT) for local routing decisions. Built with Tauri 2, Rust, WebKit, React, Monaco, xterm.js and Lucide, with a headless Node compatibility engine.
 
 ## License
 

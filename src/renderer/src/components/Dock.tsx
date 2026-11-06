@@ -48,7 +48,7 @@ export function Splitter({
 }
 
 // Cabeceras de panel que sirven para arrastrarlo (por su zona vacía o su título, no por sus botones)
-const HEADERS = '.panel-header, .agent-tabs, .bottom-tabs, .web-tabs, .editor-area > .tabs'
+const HEADERS = '.panel-header, .agent-tabs, .bottom-tabs, .web-tabs, .editor-tabs'
 const CONTROLS = 'button, input, select, textarea, a, label, [draggable="true"], [role="button"], .tab, .web-tab, .modebar, .seg, .pill'
 
 const SHORTCUT: Partial<Record<DockPanel, string>> = { sidebar: 'Cmd+B', terminal: 'Cmd+J', agents: 'Cmd+Alt+B', editor: 'Cmd+E' }

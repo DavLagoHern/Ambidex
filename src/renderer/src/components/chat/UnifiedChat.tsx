@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, ChatItem, RouteDecision } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
-import { ORCH_MODES, OrchMode, Orchestration } from '@shared/orchestrator'
+import { ACTIVE_STATUSES, ORCH_MODES, OrchMode, Orchestration } from '@shared/orchestrator'
 import { EFFORT_NAMES } from '@shared/router'
 import { api } from '../../lib/api'
 import { askText, confirmAsync, toast, useApp } from '../../lib/app-store'
@@ -356,10 +356,17 @@ function UnifiedComposer({ threadId }: { threadId: string | null }) {
 function ThreadHeader() {
   const ps = usePS()
   const threads = useStore((s) => s.threads)
+  const sessions = useStore((s) => s.sessions)
+  const orchs = useStore((s) => s.orchs)
   const activeId = useStore((s) => s.activeThread)
   const active = activeId ? threads[activeId] : undefined
   const [open, setOpen] = useState(false)
   const list = Object.values(threads).sort((a, b) => b.updatedAt - a.updatedAt)
+  const working = new Set(list.filter(t =>
+    Object.values(t.sessions).some(id => id && sessions[id]?.running) ||
+    Object.values(sessions).some(s => s.threadId === t.id && s.running) ||
+    Object.values(orchs).some(o => o.threadId === t.id && ACTIVE_STATUSES.includes(o.status))
+  ).map(t => t.id))
   return (
     <div className="session-header">
       <span className="duo-mini">
@@ -368,6 +375,7 @@ function ThreadHeader() {
       </span>
       <div className="dropdown" style={{ flex: 1, minWidth: 0 }}>
         <button className="btn ghost session-btn" onClick={() => setOpen(!open)}>
+          {activeId && working.has(activeId) && <span className="conversation-loading" role="img" aria-label="Agente trabajando" title="Hay agentes trabajando en esta conversación"><Icon.spinner size={12} className="spin" /></span>}
           <span className="ellipsis">{active?.title ?? 'Nueva conversación'}</span>
           <Icon.chevronDown size={12} />
         </button>
@@ -382,7 +390,10 @@ function ThreadHeader() {
             <div className="menu-scroll">
               {list.map((t) => (
                 <div key={t.id} className={`menu-item ${t.id === activeId ? 'selected' : ''}`} onClick={() => (setOpen(false), ps.focusThread(t.id))}>
-                  <span className="ellipsis">{t.title}</span>
+                  <span className="conversation-title">
+                    {working.has(t.id) && <span className="conversation-loading" role="img" aria-label="Agente trabajando" title="Hay agentes trabajando en esta conversación"><Icon.spinner size={12} className="spin" /></span>}
+                    <span className="ellipsis">{t.title}</span>
+                  </span>
                   <span className="muted small">{timeAgo(t.updatedAt / 1000)}</span>
                 </div>
               ))}

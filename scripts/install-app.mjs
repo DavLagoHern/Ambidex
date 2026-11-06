@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 
 const APP = { name: 'Ambidex', id: 'dev.ambidex.app' }
 const OLD = { name: 'Code AI', id: 'app.codeai.desktop' }
-const src = resolve(`dist/mac-arm64/${APP.name}.app`)
+const src = resolve(`src-tauri/target/release/bundle/macos/${APP.name}.app`)
 const dst = `/Applications/${APP.name}.app`
 const link = join(homedir(), 'Desktop', APP.name)
 
@@ -20,7 +20,8 @@ const bundleId = (app) => execFileSync('defaults', ['read', join(app, 'Contents/
 
 // hay que esperar a que se cierre de verdad: reemplazar el bundle con la app viva la deja colgada
 function quit(app, { name, id }) {
-  const exe = join(app, 'Contents/MacOS', name)
+  const executable = execFileSync('defaults', ['read', join(app, 'Contents/Info'), 'CFBundleExecutable'], { encoding: 'utf8' }).trim()
+  const exe = join(app, 'Contents/MacOS', executable)
   const running = () => {
     try {
       execFileSync('pgrep', ['-f', exe], { stdio: 'ignore' })

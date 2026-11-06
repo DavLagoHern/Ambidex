@@ -116,6 +116,7 @@ export const api = {
 
   agentInfo: bind('agents:info'),
   agentLimits: bind('agents:limits'),
+  resetCredit: bind('agents:resetCredit'),
   oneShot: bind('agents:oneShot'),
 
   listDir: bind('fs:list'),

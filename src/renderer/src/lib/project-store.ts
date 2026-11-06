@@ -958,6 +958,7 @@ export class ProjectStore {
     if (run.status !== 'running' && (!cur || cur === run.id)) this.patchSession(run.sessionId, { running: false, runId: undefined })
     const startKey = `run:${run.id}`
     if (run.status === 'running') {
+      if (prev?.status === 'running') return
       const id = uid()
       this.activityIndex.set(startKey, id)
       this.pushActivity({ ...runEntry(run, run.startedAt, true), id })

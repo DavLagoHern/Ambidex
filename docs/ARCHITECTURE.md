@@ -13,7 +13,7 @@ usando los CLI oficiales instalados y las cuentas en las que el usuario ya ha in
 | Codex CLI | 0.155.1 | `codex login status` → "Logged in using ChatGPT" |
 | Git / gh | 2.54 / 2.96 | |
 | Node | 24.5 | |
-| Rust / cargo | — | no instalado |
+| Rust / cargo | 1.99.1 | Host nativo Tauri 2 |
 
 ### Capacidades reales de los CLI (comprobadas ejecutándolos)
 
@@ -47,14 +47,11 @@ Hallazgos que condicionan el diseño:
 
 ## 2. Elección del stack
 
-**Electron 45 + React 18 + TypeScript + Vite**, con `node:sqlite`, `node-pty`, xterm.js y Monaco.
+**Tauri 2 + Rust + WebKit**, con React 18, TypeScript, Vite, xterm.js y Monaco en la interfaz.
 
-- **SwiftUI** daría la experiencia más nativa, pero sin Xcode no hay empaquetado/firmado cómodo, y el editor
-  (Monaco), la terminal (xterm.js) y los diffs tendrían que incrustarse en `WKWebView` de todos modos.
-- **Tauri 2** requiere instalar Rust y reescribir la capa nativa (PTY, procesos, Git) en Rust; no aporta nada
-  que Electron no dé aquí y añade riesgo.
-- **Electron** ya era la base del proyecto, integra Monaco/xterm/node-pty sin fricción y Electron 45 trae
-  Node 24 con `node:sqlite`: **persistencia SQLite sin módulos nativos** y testeable con Node normal.
+El host Rust gestiona ventanas, menús, diálogos, archivos, vigilancia, adjuntos y PTY. La lógica existente de agentes, Git, SQLite, enrutado, colas y orquestación se conserva en un proceso Node 24 de compatibilidad, conectado por pipes privados. Se cierra tras 30 segundos sin actividad y se despierta bajo demanda. Los turnos y las tareas en curso impiden el cierre.
+
+Es una migración híbrida: el port completo del motor a Rust sigue pendiente. La distribución no contiene Electron, Chromium, node-pty ni una copia de Node. El usuario necesita Node 24 instalado. Los detalles de compilación, aislamiento, compatibilidad de datos y pruebas están en [TAURI_MIGRATION.md](TAURI_MIGRATION.md).
 
 ## 3. Módulos
 
@@ -66,9 +63,11 @@ src/shared/          contrato común (sin dependencias de Electron)
   router.ts          motor de enrutado (reglas o clasificación de Jev + preferencias)
   web.ts             visor web: normalizar direcciones, detectar enlaces en texto
 
-src/main/            proceso principal (único que toca disco, procesos y Git)
-  index.ts           ciclo de vida, ventana, menú macOS, notificaciones
-  ipc.ts             registro de handlers del contrato + validación
+src-tauri/src/       host Rust: ciclo de vida, IPC, ventanas, archivos, WebKit, PTY y cierre en reposo
+src/engine/          motor headless de compatibilidad y adaptador de navegador nativo
+src/main/            módulos conservados del motor; index.ts/ipc.ts/web.ts/terminal.ts son referencia Electron
+  index.ts           entrada Electron anterior, excluida de la compilación Tauri
+  ipc.ts             registro Electron anterior, excluido de la compilación Tauri
   db/                SQLite: apertura, migraciones versionadas, consultas tipadas
   agents/
     env.ts           PATH del login shell, localización de binarios, entorno saneado
@@ -77,7 +76,7 @@ src/main/            proceso principal (único que toca disco, procesos y Git)
     runner.ts        procesos hijos: grupo de procesos propio, cancelación real (SIGTERM→SIGKILL)
     service.ts       SessionService: envío → ejecución → reductor → persistencia → eventos a la UI
     auth.ts          estado de autenticación y login oficial
-  web.ts             visor web: <webview> aislado, menús contextuales, ventanas flotantes, favicons
+  web.ts             implementación Electron anterior; src-tauri/src/browser.rs la sustituye
   jev.ts             Jev: instalación verificada, servidor local bajo demanda, clasificación
   mcp-server.ts      servidor MCP mínimo (HTTP en 127.0.0.1, una clave por turno) para herramientas propias
   web-agent.ts       herramientas MCP de la Web: abrir, leer con elementos numerados, pulsar, escribir, capturar

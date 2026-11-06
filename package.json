@@ -3,30 +3,28 @@
   "productName": "Ambidex",
   "version": "0.2.0",
   "description": "Claude Code and Codex, working as one: a macOS desktop app that runs the official CLIs with your own plans.",
-  "main": "out/main/index.js",
   "private": true,
   "scripts": {
-    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
-    "build": "electron-vite build",
-    "start": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
+    "dev": "tauri dev",
+    "build": "tauri build --bundles app",
+    "start": "open src-tauri/target/release/bundle/macos/Ambidex.app",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning vitest run",
     "test:watch": "NODE_OPTIONS=--disable-warning=ExperimentalWarning vitest",
-    "check": "npm run typecheck && npm test && npm run build",
-    "rebuild": "electron-rebuild -f -w node-pty",
-    "postinstall": "electron-rebuild -f -w node-pty || echo \"node-pty no compilado: la terminal usará modo básico\"",
-    "test:e2e": "node tests/e2e/smoke.mjs",
-    "dist": "npm run build && electron-builder --mac dir && node scripts/sign.mjs",
-    "dist:dmg": "npm run build && electron-builder --mac dmg && node scripts/sign.mjs",
+    "check": "npm run typecheck && npm test && npm run test:native && npm run build",
+    "test:e2e": "node tests/e2e/tauri.mjs",
+    "dist": "npm run build && node scripts/sign.mjs",
+    "dist:dmg": "tauri build --bundles app,dmg",
     "install:app": "node scripts/install-app.mjs",
-    "icon": "env -u ELECTRON_RUN_AS_NODE electron scripts/render-icon.cjs",
-    "test:e2e:team": "node tests/e2e/team.mjs"
+    "icon": "sips -s format png build/icon.icns --out build/icon.png",
+    "build:assets": "node scripts/build-engine.mjs && vite build",
+    "dev:assets": "node scripts/dev-assets.mjs",
+    "test:native": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "node-pty": "1.0.0"
+    "@tauri-apps/api": "^2.10.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "3.7.1",
     "@monaco-editor/react": "4.6.0",
     "@types/node": "^24.19.2",
     "@types/react": "18.3.12",
@@ -35,9 +33,6 @@
     "@xterm/addon-fit": "0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "5.5.0",
-    "electron": "^45.2.1",
-    "electron-builder": "^26.18.0",
-    "electron-vite": "2.3.0",
     "lucide-react": "^1.66.0",
     "monaco-editor": "0.52.2",
     "playwright-core": "^1.64.1",
@@ -45,70 +40,12 @@
     "react-dom": "18.3.1",
     "typescript": "5.6.3",
     "vite": "5.4.11",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "@tauri-apps/cli": "^2.10.0",
+    "esbuild": "^0.25.0"
   },
   "author": {
     "name": "DavLagoHern"
-  },
-  "build": {
-    "appId": "dev.ambidex.app",
-    "productName": "Ambidex",
-    "copyright": "Copyright © 2026 DavLagoHern",
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "out/**",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "**/node_modules/node-pty/**"
-    ],
-    "electronDist": "node_modules/electron/dist",
-    "electronVersion": "45.2.1",
-    "npmRebuild": false,
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.icns",
-      "target": [
-        {
-          "target": "dir",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ],
-      "identity": null,
-      "hardenedRuntime": false,
-      "darkModeSupport": true,
-      "extendInfo": {
-        "CFBundleDocumentTypes": [
-          {
-            "CFBundleTypeName": "Folder",
-            "CFBundleTypeRole": "Viewer",
-            "LSHandlerRank": "Alternate",
-            "LSItemContentTypes": [
-              "public.folder"
-            ]
-          }
-        ]
-      },
-      "electronLanguages": [
-        "es",
-        "en"
-      ]
-    },
-    "dmg": {
-      "title": "Ambidex"
-    },
-    "electronFuses": {
-      "runAsNode": false,
-      "enableNodeOptionsEnvironmentVariable": false,
-      "enableCookieEncryption": true,
-      "onlyLoadAppFromAsar": true,
-      "enableNodeCliInspectArguments": true
-    }
   },
   "license": "MIT",
   "repository": {

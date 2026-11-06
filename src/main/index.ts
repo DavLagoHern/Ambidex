@@ -1,4 +1,5 @@
-import { fetchAccountLimits } from './agents/usage-limits'
+import { consumeResetCredit, fetchAccountLimits } from './agents/usage-limits'
+import { UsageRefresh } from './agents/usage-refresh'
 import { app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, nativeImage, nativeTheme, Notification, shell } from 'electron'
 import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
@@ -74,6 +75,8 @@ const webAgent = createWebAgent({
 })
 let agentInfo: AgentInfo[] = []
 let quitting = false
+let usageRefresh: UsageRefresh
+let usageResetting = false
 // carpetas que macOS pide abrir (arrastradas al icono del Dock o "Abrir con") antes de que haya ventana
 const pendingOpen: string[] = []
 
@@ -104,6 +107,28 @@ const attachmentsDir = () => join(app.getPath('userData'), 'attachments')
 // cada una escucha solo los que le interesan
 function push<K extends PushChannel>(channel: K, payload: PushContract[K]) {
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && isAppUrl(w.webContents.getURL())) w.webContents.send(channel, payload)
+}
+
+function savedLimits(): Partial<Record<AgentId, AgentLimits>> {
+  const all = store.getLimits()
+  const codex = latestCodexLimits()
+  if (codex && (!all.codex || codex.updatedAt > all.codex.updatedAt)) all.codex = codex
+  return all
+}
+
+async function refreshAccountUsage() {
+  if (quitting) return
+  let value: AgentLimits
+  try {
+    const bin = resolveBin('codex', settings())
+    if (!bin) return
+    value = await fetchAccountLimits(bin, homedir(), childEnv())
+  } catch (error) {
+    value = { ...(savedLimits().codex ?? { agent: 'codex', windows: [], updatedAt: 0 }), refreshError: error instanceof Error ? error.message : String(error) }
+  }
+  if (quitting) return
+  store.saveLimits(value)
+  push('limits', value)
 }
 
 // Jev tarda ~4 s en arrancar y al enviar solo se le esperan 3: se despierta antes (al abrir y al escribir), sin preguntar nada
@@ -252,6 +277,7 @@ function updateDockBadge() {
 
 function notifyFinished(run: Parameters<NonNullable<ConstructorParameters<typeof SessionService>[0]['onFinished']>>[0]) {
   updateDockBadge()
+  usageRefresh?.afterTurn()
   const s = settings()
   if (!s.notifications || !Notification.isSupported()) return
   const focused = win?.isFocused() && s.activeProjectId === run.projectId
@@ -643,20 +669,27 @@ function handlers(): Handlers {
 
     'agents:info': (refresh) => (refresh || !agentInfo.length ? refreshAgents() : agentInfo),
     'agents:limits': async (refresh) => {
-      const all: Partial<Record<AgentId, AgentLimits>> = store.getLimits()
-      const codex = latestCodexLimits()
-      if (codex && (!all.codex || codex.updatedAt > all.codex.updatedAt)) all.codex = codex
-      if (refresh) {
-        try {
-          const bin = resolveBin('codex', settings())
-          if (!bin) throw new Error('Codex no está instalado')
-          all.codex = await fetchAccountLimits(bin, homedir(), childEnv())
-          store.saveLimits(all.codex)
-        } catch (error) {
-          all.codex = { ...(all.codex ?? { agent: 'codex', windows: [], updatedAt: 0 }), refreshError: error instanceof Error ? error.message : String(error) }
-        }
-      }
-      return all
+      if (refresh) await usageRefresh.refresh()
+      return savedLimits()
+    },
+    'agents:resetCredit': async (key) => {
+      if (usageResetting) throw new Error('Ya hay un reinicio en curso')
+      const bin = resolveBin('codex', settings())
+      if (!bin) throw new Error('Codex no está instalado')
+      usageResetting = true
+      try {
+        // Confirmación nativa: ningún cliente puede canjear un crédito en segundo plano.
+        const answer = await dialog.showMessageBox(win ?? undefined!, {
+          type: 'question', message: '¿Usar un reinicio de cuota de Codex?',
+          detail: 'Se canjeará un reinicio disponible de tu cuenta. Esta acción no se puede deshacer.',
+          buttons: ['Cancelar', 'Usar reinicio'], defaultId: 0, cancelId: 0
+        })
+        if (answer.response !== 1) return null
+        const outcome = await consumeResetCredit(bin, homedir(), childEnv(), key)
+        // Si había una lectura anterior en curso, volver a consultar después del canje.
+        await usageRefresh.refreshAfterChange()
+        return outcome
+      } finally { usageResetting = false }
     },
     'agents:oneShot': (agent, cwd, prompt, stdin, model) => {
       const bin = resolveBin(agent, settings())
@@ -954,6 +987,8 @@ app.whenReady().then(() => {
   app.setAboutPanelOptions({ applicationName: 'Ambidex', applicationVersion: app.getVersion(), copyright: 'Claude Code + Codex, juntos.' })
 
   registerHandlers(handlers(), webSenderHandlers, isTrusted)
+  usageRefresh = new UsageRefresh(() => refreshAccountUsage().catch(error => { logger.warn('usage.refresh', { error: String(error) }) }))
+  if (!process.env.AMBIDEX_USER_DATA) usageRefresh.start()
   setupWeb({ windowPrefs, loadRenderer, isTrusted: isAppUrl, attachmentsDir, openInProject: (projectId, url) => push('web:agent-open', { projectId, url }) })
   webAgent.start().catch((e) => logger.warn('web.agent.start', { error: String(e) }))
   buildMenu()
@@ -987,6 +1022,7 @@ app.on('before-quit', (e) => {
   }
   e.preventDefault()
   quitting = true
+  usageRefresh?.stop()
   updater?.stop()
   appUpdater?.stop()
   const timeout = new Promise((r) => setTimeout(r, 4000))

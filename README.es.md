@@ -10,10 +10,12 @@ Ejecuta los **CLI oficiales** instalados en tu Mac con las cuentas en las que ya
 
 Arquitectura, modelo de datos y decisiones: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+> **Migración a Tauri 2 y Rust:** las ventanas, terminales PTY, archivos y visor WebKit ya usan el host Rust. El motor de agentes, SQLite, Git y orquestación sigue en un proceso Node 24+ para conservar las funciones existentes. Es una migración híbrida; el port completo del motor a Rust sigue pendiente. [Arquitectura, requisitos y pruebas](docs/TAURI_MIGRATION.md).
+
 ## Instalar
 
 ```bash
-npm install            # dependencias y node-pty compilado para Electron
+npm install            # dependencias de la interfaz y CLI de Tauri
 npm run dist           # compila y empaqueta "Ambidex.app" (firma con tu identidad del llavero, o ad hoc)
 npm run install:app    # la copia a /Applications, crea un acceso en el Escritorio y la abre
 ```
@@ -21,8 +23,8 @@ npm run install:app    # la copia a /Applications, crea un acceso en el Escritor
 A partir de ahí se actualiza sola: al abrirla (y cada 6 horas) trae lo último de GitHub con `git pull --ff-only` en esa misma carpeta, lo compila en segundo plano y te ofrece **Reiniciar** (si no, se instala al cerrar la app). No toca nada si el clon tiene cambios sin commitear o commits propios: te avisa en **Ajustes → Agentes**. Se puede desactivar; el registro queda en `logs/update.log`.
 
 Requisitos:
-- macOS en Apple Silicon (probado en macOS 27)
-- Node 22.15 o superior (recomendado 24)
+- macOS 14 o superior en Apple Silicon (probado en macOS 27)
+- Node 24 o superior, Rust estable y las herramientas de línea de comandos de Xcode
 - Git
 - [Claude Code](https://code.claude.com) con sesión iniciada (`claude auth login`)
 - [Codex CLI](https://github.com/openai/codex) con sesión iniciada (`codex login`)
@@ -158,15 +160,16 @@ El motor es local, explícito y persistente (SQLite). Si cierras la app a mitad,
 
 ```bash
 npm run typecheck     # TypeScript estricto
-npm test              # 153 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
-npm run build && npm run test:e2e          # E2E de la app real (Playwright) con los CLI reales
-npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales sobre un repositorio temporal
+npm test              # 187 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
+npm run test:native   # pruebas Rust de rutas, enlaces simbólicos y búfer de terminal
+npm run build:assets
+cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml
+npm run test:e2e      # aplicación real en WebKit con CLI simulados, sin gastar cuota
 ```
 
 - Los tests unitarios no gastan cuota. Los adaptadores se prueban con **salidas reales capturadas** de Claude Code 2.1.316 y Codex 0.155.1. El orquestador se prueba de punta a punta con un CLI falso que imita el formato de cada agente: plan, trabajo en paralelo, intercambio de ramas, una ronda de revisión con correcciones, integración, pruebas, aprobación, recuperación tras un cierre inesperado y modo comparación.
 - Jev se prueba con una release simulada: mismo paquete, sumas y API, y un servidor falso. Las pruebas cubren la instalación verificada, una descarga manipulada, el arranque con clave, la decisión, la caché, el servidor huérfano y la vuelta a las reglas si no contesta.
-- `test:e2e` envía mensajes cortos a cada agente: respuestas de una palabra, una imagen que Claude tiene que describir, un fichero que crea y se deshace, la Web manejada por Claude (abrir, pulsar un enlace y leer la pestaña nueva) y por Codex, y un enlace de una respuesta que se abre en el visor web. Con `E2E_SKIP_AGENTS=1` no gasta cuota. `E2E_APP=…/Ambidex.app/Contents/MacOS/Ambidex` prueba la app empaquetada.
-- `test:e2e:team` gasta algo más de cuota: unas 5-8 ejecuciones de agentes.
+- `test:e2e` usa datos aislados y comprueba la aplicación Rust/WebKit: archivos, Git, terminal nativa, ambos agentes simulados, ventanas, navegación, capturas, aislamiento de la API, cierre por inactividad y recuperación del motor. También verifica que el historial y los proyectos sobreviven al cierre. Los scripts Electron anteriores quedan como referencia; no forman parte del ejecutable nuevo.
 
 ## Seguridad
 
@@ -185,7 +188,7 @@ npm run build && npm run test:e2e:team     # E2E del equipo con agentes reales s
 - **Git:** `git:run` admite una lista cerrada de subcomandos y bloquea `-c`, `--upload-pack`, `--exec` y `rebase -x`. Git nunca abre un editor.
 - **Pruebas del equipo:** solo se ejecutan comandos de pruebas conocidos y sin metacaracteres.
 - **Permisos:** los modos sin restricciones se eligen en el selector de cada conversación y se marcan en amarillo. Nada se integra en tu rama ni se publica sin una acción tuya, y las acciones destructivas piden confirmación nativa.
-- **App empaquetada:** los *fuses* de Electron `RunAsNode` y `NODE_OPTIONS` están desactivados, así que la app no se puede usar como un intérprete de Node encubierto y arranca bien aunque la lances desde una terminal de VS Code.
+- **App empaquetada:** el ejecutable Rust no incluye Electron ni Chromium. Solo las ventanas locales autorizadas acceden al puente nativo; las páginas del visor no reciben permisos para llamar a la aplicación. El motor de compatibilidad requiere Node 24 y se cierra cuando queda inactivo.
 - **Auditoría:** registro en SQLite de operaciones Git, escrituras, ejecuciones, logins e integraciones.
 
 ## Datos locales

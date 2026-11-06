@@ -1,10 +1,11 @@
 import { memo, ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { WebIssue } from '@shared/types'
-import { WEB_PARTITION, isLocalUrl, normalizeAddress, shortUrl, type WebTab } from '@shared/web'
+import { isLocalUrl, normalizeAddress, shortUrl, type WebTab } from '@shared/web'
 import { api, on } from '../lib/api'
 import { toast } from '../lib/app-store'
 import { errMsg } from '../lib/utils'
 import { Icon } from './Icons'
+import { attachNativePage, type NativePage } from '../lib/native-page'
 
 // Lo que el visor necesita de quien lo aloja (el proyecto o una ventana flotante)
 export interface WebModel {
@@ -16,19 +17,7 @@ export interface WebModel {
   update: (id: string, patch: Partial<Omit<WebTab, 'id'>>) => void
 }
 
-// Métodos del elemento <webview> de Electron que se usan aquí
-interface WebviewEl extends HTMLElement {
-  loadURL(url: string): Promise<void>
-  getURL(): string
-  canGoBack(): boolean
-  canGoForward(): boolean
-  goBack(): void
-  goForward(): void
-  reload(): void
-  stop(): void
-  isLoading(): boolean
-  getWebContentsId(): number
-}
+type WebviewEl = NativePage
 
 interface Nav {
   back: boolean
@@ -56,8 +45,13 @@ const Page = memo(function Page({ tab, active, pages }: { tab: WebTab; active: b
   const ref = useRef<WebviewEl>(null)
   // la URL inicial se fija una vez: las navegaciones posteriores las hace la propia página o loadURL
   const src = useRef(tab.url || 'about:blank').current
-  useEffect(() => pages.attach(tab.id, ref.current!), [])
-  return <webview ref={ref as never} className={`web-page ${active ? 'on' : ''}`} src={src} partition={WEB_PARTITION} {...({ allowpopups: 'true' } as object)} />
+  useEffect(() => {
+    const el = ref.current!
+    const detach = pages.attach(tab.id, el)
+    const native = attachNativePage(el, src, message => el.dispatchEvent(Object.assign(new Event('did-fail-load'), { errorCode: -1, errorDescription: message, validatedURL: src, isMainFrame: true })))
+    return () => { detach(); native() }
+  }, [])
+  return <div ref={ref} className={`web-page ${active ? 'on' : ''}`} />
 })
 
 // `extra`: lo que el proyecto añade a la página en blanco y al error de un localhost (p. ej. arrancar el servidor)
@@ -245,11 +239,12 @@ export function WebPanel({
         command(e.key.toLowerCase(), model.active)
       }}
     >
-      <div className="web-tabs">
+      <div className="web-tabs" data-tauri-drag-region={floating ? 'deep' : undefined}>
         {model.tabs.map((t) => (
           <div
             key={t.id}
             className={`web-tab ${t.id === model.active ? 'on' : ''}`}
+            data-tauri-drag-region="false"
             title={t.url === 'about:blank' ? 'Nueva pestaña' : t.url}
             onClick={() => model.select(t.id)}
             onMouseDown={(e) => e.button === 1 && (e.preventDefault(), model.close(t.id))}

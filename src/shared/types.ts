@@ -33,6 +33,10 @@ export interface LimitWindow {
 }
 
 export interface AgentLimits {
+  resetCredits?: {
+    availableCount: number
+    credits?: { id: string; title?: string; expiresAt?: number }[]
+  }
   source?: 'live' | 'session' | 'stream'
   refreshError?: string
   agent: AgentId
@@ -41,6 +45,10 @@ export interface AgentLimits {
   plan?: string
   updatedAt: number
 }
+
+export type ResetCreditOutcome = 'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit'
+
+export const USAGE_REFRESH_MS = 30 * 60_000
 
 export interface TurnUsage {
   inputTokens: number
@@ -277,6 +285,7 @@ export interface SearchHit {
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
 export interface RunInfo {
+  lastActivityAt?: number // última salida recibida del proceso, no un latido artificial
   id: string
   sessionId: string
   projectId: string
@@ -598,8 +607,8 @@ export const DEFAULT_SETTINGS: Settings = {
 
 export interface AppInfo {
   version: string
-  electron: string
-  node: string
+  runtime: string
+  webview: string
   dataDir: string
   dbPath: string
   dbSize: number

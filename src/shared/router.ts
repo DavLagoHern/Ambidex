@@ -1,5 +1,5 @@
-import type { AgentId, BuiltinCategory, ModelPolicy, ModelTier, RouteCategory, RouteCategoryDef, RouteDecision, Settings } from './types'
-import { AGENT_NAMES } from './types'
+import type { AgentId, AgentLimits, BuiltinCategory, ModelPolicy, ModelTier, RouteCategory, RouteCategoryDef, RouteDecision, Settings } from './types'
+import { AGENT_NAMES, USAGE_REFRESH_MS } from './types'
 
 export const CATEGORY_LABELS: Record<RouteCategory, string> & Record<BuiltinCategory, string> = {
   plan: 'Planificar y arquitectura',
@@ -109,6 +109,14 @@ export const TIER_LABELS: Record<ModelTier, string> = { hard: 'difícil', easy: 
 // contesta a tiempo o deciden las reglas, el de las sencillas, que sigue siendo muy capaz y gasta bastante menos.
 // Sin `confidence` (lo decidió otra IA, que no da seguridad) se toma la dificultad tal cual.
 // `catalog`: modelos que ofrece el CLI instalado; uno que no esté (CLI antiguo) no se elige.
+// Extra headroom selects the powerful model; effort still follows task difficulty.
+export function weeklyHeadroom(limits: AgentLimits | undefined, now = Date.now()): number | undefined {
+  if (!limits || limits.refreshError || !Number.isFinite(limits.updatedAt) || now - limits.updatedAt > USAGE_REFRESH_MS + 5 * 60_000) return
+  const weekly = limits.windows.filter(w => /^(Semana|Week|Weekly|7 days|7 días)(?: Opus)?$/i.test(w.label))
+  if (!weekly.length || weekly.some(w => !Number.isFinite(w.usedPercent) || w.usedPercent < 0 || w.usedPercent > 100 || (w.resetsAt !== undefined && w.resetsAt * 1000 <= now))) return
+  return 100 - Math.max(...weekly.map(w => w.usedPercent))
+}
+
 export const HARD_MODEL_CONFIDENCE = 0.8
 export function pickModel(
   agent: AgentId,

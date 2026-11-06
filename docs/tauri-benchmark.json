@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-06",
+  "platform": "macOS 27.0.1, Apple Silicon",
+  "profile": "One open project, idle chat, no active agents; separate copies of the same SQLite data",
+  "sampleAfterSeconds": 66,
+  "method": "Launch Services, footprint physical memory, WebKit helper attribution by responsible process PID",
+  "measurements": [
+    {
+      "runtime": "electron",
+      "bundleBytes": 283889664,
+      "physicalMemoryBytes": 159290768,
+      "processCount": 4
+    },
+    {
+      "runtime": "tauri",
+      "bundleBytes": 12316672,
+      "physicalMemoryBytes": 139660624,
+      "processCount": 4
+    }
+  ],
+  "limitations": "Single local sample; excludes unrelated applications. This is a hybrid Tauri/Rust + on-demand Node implementation, not a complete Rust engine port. Active-agent and editor workloads can differ."
+}
