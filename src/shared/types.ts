@@ -2,6 +2,22 @@ export type AgentId = 'claude' | 'codex'
 export const AGENTS: AgentId[] = ['claude', 'codex']
 export const AGENT_NAMES: Record<AgentId, string> = { claude: 'Claude Code', codex: 'Codex' }
 
+export type ApprovalScope = 'once' | 'session'
+export type ApprovalState = 'pending' | 'allowed' | 'denied' | 'expired' | 'cancelled'
+export interface ApprovalDecision { allow: boolean; scope: ApprovalScope; message?: string }
+export interface ApprovalRequest {
+  id: string; runId: string; sessionId: string; projectId: string; agent: AgentId
+  nativeId: string | number
+  kind: 'command' | 'file' | 'directory' | 'tool' | 'permissions' | 'network'
+  title: string; tool?: string; command?: string; cwd?: string; paths?: string[]; reason?: string; subagent?: string
+  scopes: ApprovalScope[]; state: ApprovalState; at: number
+  rules?: string[]
+  decision?: ApprovalDecision & { by: 'user' | 'grant'; at: number }
+}
+export interface SessionGrant {
+  id: string; sessionId: string; agent: AgentId; title: string; rule: string; at: number
+}
+
 // ---------- proyectos ----------
 
 export interface ProjectMeta {
@@ -98,6 +114,7 @@ export type ChatItem =
   | { id: string; type: 'todo'; items: { text: string; done: boolean }[]; at?: number }
   | { id: string; type: 'usage'; usage: TurnUsage; at?: number }
   | { id: string; type: 'permission'; denials: { tool: string; input: string }[]; at?: number }
+  | { id: string; type: 'approval'; request: ApprovalRequest; at?: number }
   | { id: string; type: 'notice'; text: string; at?: number }
   | { id: string; type: 'error'; text: string; at?: number }
 

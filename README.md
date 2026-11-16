@@ -94,7 +94,7 @@ Check both before relying on Ambidex for heavy use.
 npm run typecheck
 npm run test:native
 npm run build:assets
-npm test                                # 187 unit tests, no quota used
+npm test                                # unit tests, no quota used
 cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml && npm run test:e2e       # native integration tests with simulated CLIs (no quota)
 ```
 
@@ -103,7 +103,7 @@ The CLI adapters are tested against output captured from Claude Code 2.1.316 and
 ## Known limitations
 
 - **Platform and language:** macOS on Apple Silicon only, and the UI is in Spanish.
-- **Permissions:** the CLIs run non-interactively, so anything that needs permission is denied, and the chat explains how to allow it. There is no live approval prompt.
+- **Live permissions:** normal chats show approval cards with allow once, allow in this conversation (when supported), and deny. Conversation grants last until Ambidex closes; revoking a grant also stops a running agent that may have loaded it. Team mode, structured jobs and “don't ask” keep their non-interactive policy.
 - **Undo:** only works in git repositories.
 - **Jev:** takes about 0.7 s per decision on an M-series Mac. If it doesn't answer in time, the rules decide and the simple-task model is used; the hard-task model needs Jev to rate the message hard with at least 30 % confidence. On a set of 25 sample requests it rated difficulty correctly in 22.
 - **CLI changes:** the output formats of the CLIs change often, and new versions may need adapter updates.

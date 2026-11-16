@@ -11,13 +11,14 @@ import { basename, durationText, errMsg, fmtTokens, fuzzyScore, relPath, toolNam
 import { AgentLogo, Icon } from '../Icons'
 import { Markdown } from '../Markdown'
 import { imageMenu } from '../../lib/image-menu'
+import { ApprovalCard } from './ApprovalCard'
 
 export const CLAUDE_MODES: { id: ClaudeMode; label: string; hint: string }[] = [
   { id: 'plan', label: 'Plan', hint: 'Solo lectura: analiza y propone' },
-  { id: 'acceptEdits', label: 'Editar', hint: 'Edita ficheros; lo que requiere permiso se deniega' },
+  { id: 'acceptEdits', label: 'Editar', hint: 'Edita ficheros y te pregunta cuando necesita otro permiso' },
   { id: 'auto', label: 'Auto', hint: 'Un clasificador permite lo seguro y bloquea lo arriesgado' },
   { id: 'dontAsk', label: 'No preguntar', hint: 'Deniega todo lo que necesitaría permiso' },
-  { id: 'manual', label: 'Manual', hint: 'Solo lo permitido en tu configuración de Claude Code' },
+  { id: 'manual', label: 'Manual', hint: 'Te pregunta antes de las acciones que requieren permiso' },
   { id: 'bypassPermissions', label: 'Sin límites', hint: 'Sin pedir permiso para nada: puede ejecutar y cambiar lo que quiera' }
 ]
 export const CODEX_SANDBOX: { id: CodexSandbox; label: string; hint: string }[] = [
@@ -336,6 +337,8 @@ export const Item = memo(function Item({ item, session }: { item: ChatItem; sess
           <div className="muted small">Cambia el modo de permisos (selector con el escudo) si quieres permitirlo, y vuelve a pedírselo.</div>
         </div>
       )
+    case 'approval':
+      return <ApprovalCard request={item.request} />
     case 'notice':
       return <div className="notice">{item.text}</div>
     case 'error':

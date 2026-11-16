@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import type { AgentEvent, AgentLimits, ClaudeMode, LimitWindow } from '@shared/types'
 import { imageMime } from '../attachments'
 import { Adapter, parseJson, RunRequest, short } from './types'
+import { ClaudeLiveProcess } from './claude-live'
 
 const WINDOW_LABELS: Record<string, string> = {
   five_hour: '5 h',
@@ -65,8 +66,9 @@ export const claudeAdapter: Adapter = {
       mode,
       // sin un host que responda, lo que requeriría permiso se deniega y se informa en el resultado
       '--permission-prompts',
-      'none'
+      req.approvals ? 'host' : 'none'
     ]
+    if (req.approvals) args.push('--permission-prompt-tool', 'stdio')
     // con imágenes, el mensaje va como JSON con bloques de texto e imagen (ver stdin)
     if (req.images?.length || req.stream) args.push('--input-format', 'stream-json')
     if (req.resumeId) args.push('--resume', req.resumeId)
@@ -87,7 +89,7 @@ export const claudeAdapter: Adapter = {
   // con entrada stream-json, lo que se escribe a mitad de turno lo incorpora en el siguiente paso, sin parar
   streams: (req) => !req.schema,
   steer: (text, images) => userLine(text, images),
-  turnEnded: (line) => line.startsWith('{"type":"result"') || parseJson(line)?.type === 'result',
+  startProcess: (spec, req, handlers) => new ClaudeLiveProcess(spec, req, handlers),
 
   createParser() {
     const tools = new Map<string, { name: string; input: Record<string, unknown> }>()

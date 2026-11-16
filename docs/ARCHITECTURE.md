@@ -36,8 +36,15 @@ Hallazgos que condicionan el diseño:
   al propio CLI con `codex debug models`, deja la caché solo como respaldo y elige un modelo válido cuando
   `config.toml` apunta a uno que no está disponible. (Codex 0.166.0, instalado el 2026-11-02, ya ofrece
   `gpt-6.1-sol` y `gpt-6.1-terra`.)
-- En modo `-p`, Claude se lanza con `--permission-prompts none`: sin un host que responda, lo que requeriría
-  permiso se deniega de forma determinista y aparece en `permission_denials`, que la UI muestra.
+- En el chat, Claude usa `--permission-prompts host --permission-prompt-tool stdio`; el broker contesta
+  `can_use_tool` por stdin. `claude-live.ts` conserva la entrada hasta el resultado final, sin permisos
+  pendientes ni tareas de fondo. Los resultados intermedios se retienen para no cerrar subagentes ni contar
+  dos veces el uso. Equipo y trabajos estructurados conservan `none` y sus herramientas permitidas.
+- Codex usa `on-request` y `approvalsReviewer:user` solo cuando hay un host interactivo del chat. El broker
+  mantiene los permisos de conversación en memoria; las respuestas nativas conceden la solicitud actual.
+  No se escriben políticas permanentes. Las tarjetas se persisten como mensajes y caducan al recuperar un cierre.
+- Mientras hay permisos recordados, el motor no se aparca: evita perderlos en un reinicio interno de Node.
+  Revocar elimina la regla y cancela el proceso activo que podría tenerla cargada.
 - Ambos CLI aceptan el prompt por stdin (`claude -p` sin argumento; `codex exec -`, también al reanudar), lo que
   evita que un prompt que empiece por `-` se interprete como opción.
 - Si la app se lanza desde una terminal que ya ejecuta Claude Code, hereda variables de sesión

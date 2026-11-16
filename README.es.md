@@ -52,6 +52,8 @@ Siempre a mano: **modelo**, **razonamiento** y **permisos**. En «Auto» se ven 
 
 **Sin límites** (Claude) y **Acceso total** (Codex) están siempre en el selector de permisos y se marcan en amarillo cuando están elegidos.
 
+**Aprobaciones en el chat:** cuando Claude o Codex necesitan permiso, aparece una tarjeta con la acción, el motivo y la carpeta. Puedes permitir una vez, recordarlo en esta conversación cuando la petición lo admite, o denegar. Los permisos recordados se ven y se pueden revocar en la tarjeta; se borran al cerrar Ambidex. Revocar detiene el agente si está trabajando para retirar también las reglas cargadas en ese proceso. Las solicitudes de permisos adicionales de Codex indican su alcance de un turno. Un aviso en la pestaña y una notificación nativa permiten localizar lo pendiente.
+
 **Mientras trabaja:** lo que escribas va directo a la **cola**, sin esperar a Jev. Desde ahí eliges: añadirlo al turno en curso (Claude Code y Codex lo reciben sin pararse), mandárselo al otro agente o dejarlo, y Jev lo reparte cuando quede libre. La cola se puede editar y sobrevive a reinicios. En Ambos, si trabajan simultáneamente, cada uno recibe la tarea y el resultado del otro para coordinarse. Con el botón **+** (o ⌘↵) el mensaje sale como tarea aparte, en una conversación nueva.
 
 En el cuadro de texto:
@@ -160,7 +162,7 @@ El motor es local, explícito y persistente (SQLite). Si cierras la app a mitad,
 
 ```bash
 npm run typecheck     # TypeScript estricto
-npm test              # 187 tests: SQLite, adaptadores, reductor, procesos, Git, seguridad, enrutado, modelos por dificultad, actualización de los CLI y de la propia app, razonamiento automático, cola, orquestador, visor web, resaltado, Jev, paneles, imágenes, deshacer, servidor de desarrollo, extensiones, conversaciones de fuera y MCP
+npm test              # tests de motor, permisos en vivo, comprobaciones, SQLite, adaptadores, Git, enrutado, orquestador y herramientas
 npm run test:native   # pruebas Rust de rutas, enlaces simbólicos y búfer de terminal
 npm run build:assets
 cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml
@@ -211,7 +213,7 @@ npm run test:e2e      # aplicación real en WebKit con CLI simulados, sin gastar
 - **Jev con el modelo real:** instalado desde la app y verificado con SHA-256. Una prueba en español acertó (depurar, 80 %) en 711 ms, más lento que las decenas de milisegundos que anuncian sus autores pero dentro del margen del enrutado (1,2 s mientras escribes, 3 s al enviar). En la dificultad acertó 22 de 25 peticiones de prueba. Su acierto en el tipo de tarea con más mensajes aún no está medido, ni cuánto tiempo añade preguntar la dificultad en la misma petición.
 - **Visor web:** Google y otras webs pueden pedir un captcha o bloquear el inicio de sesión dentro de apps embebidas. Para eso, ⌘-clic abre el enlace en tu navegador.
 
-- **Aprobación de permisos en vivo:** los CLI se ejecutan en modo no interactivo. Lo que requiere permiso se deniega y se muestra en el chat con la forma de permitirlo (cambiar el modo de permisos). La aprobación interactiva necesitaría el protocolo de control de Claude y `codex app-server`, que Codex documenta como experimental.
+- **Aprobaciones en Equipo y tareas estructuradas:** conservan la política no interactiva y sus herramientas permitidas; las tarjetas en vivo se ofrecen en el chat normal. «No preguntar» sigue denegando lo que necesitaría aprobación.
 - **Deshacer un turno:**
   - Solo en proyectos con Git.
   - Si otro agente trabajaba a la vez en la misma carpeta, lo que cambió en ese rato entra en la misma foto (el diálogo lo avisa).

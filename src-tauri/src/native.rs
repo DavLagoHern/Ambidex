@@ -110,7 +110,9 @@ pub async fn dispatch(
             "test:capture" => {
                 let view = app.get_webview(owner).ok_or("Ventana cerrada")?;
                 let bytes = crate::browser::snapshot(&view).await?;
-                let suffix = if arg(args, 0).as_str() == Some("wide") {
+                let suffix = if arg(args, 0).as_str() == Some("approval") {
+                    ".approval.png"
+                } else if arg(args, 0).as_str() == Some("wide") {
                     ".wide.png"
                 } else {
                     ".narrow.png"
@@ -938,6 +940,7 @@ pub async fn finished(app: &tauri::AppHandle, state: &Arc<Backend>, run: Value) 
         "Codex"
     };
     let verb = match run["status"].as_str() {
+        Some("approval") => "necesita permiso",
         Some("completed") => "ha terminado",
         Some("cancelled") => "se ha detenido",
         _ => "ha fallado",

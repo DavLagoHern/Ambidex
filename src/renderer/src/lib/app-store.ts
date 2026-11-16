@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { AgentId, AgentInfo, AgentLimits, AppUpdate, CliUpdate, ProjectMeta, ProjectPatch, Settings, JevStatus } from '@shared/types'
+import type { AgentId, AgentInfo, AgentLimits, AppUpdate, CliUpdate, ProjectMeta, ProjectPatch, Settings, JevStatus, ApprovalRequest } from '@shared/types'
 import { AGENT_NAMES } from '@shared/types'
 import { api, invoke, on } from './api'
 import { ProjectStore, WINDOW_ID } from './project-store'
@@ -35,6 +35,7 @@ export interface AppState {
   limits: Partial<Record<AgentId, AgentLimits>>
   // sesión → proyecto, de los agentes que están trabajando ahora
   running: Record<string, { projectId: string; agent: AgentId; runId: string }>
+  approvals: Record<string, ApprovalRequest>
   changes: Record<string, number>
   // proyectos donde un agente terminó mientras no los mirabas (se limpia al entrar)
   finished: Record<string, 'ok' | 'error'>
@@ -68,6 +69,7 @@ let state: AppState = {
   agentsLoading: false,
   limits: {},
   running: {},
+  approvals: {},
   changes: {},
   finished: {},
   toasts: [],
@@ -330,9 +332,19 @@ export function setChanges(projectId: string, n: number) {
 // ---------- arranque ----------
 
 let started = false
+const settledApprovals = new Set<string>()
 
 // Avisos del proceso principal que mantienen al día los proyectos (en la ventana principal y en las de panel)
 function bindData() {
+  on('perm:changed', request => {
+    setApp(s => {
+      const approvals = { ...s.approvals }
+      if (request.state === 'pending') approvals[request.id] = request
+      else { delete approvals[request.id]; settledApprovals.add(request.id) }
+      return { approvals }
+    })
+    stores.get(request.projectId)?.applyItems(request.sessionId, [{ id: request.id, type: 'approval', request, at: request.at }])
+  })
   on('session:items', (p) => stores.get(p.projectId)?.applyItems(p.sessionId, p.items))
   on('web:agent', (p) => stores.get(p.projectId)?.set({ webAgent: { agent: p.agent, action: p.action, at: Date.now() } }))
   on('session:meta', (meta) => stores.get(meta.projectId)?.upsertSession(meta))
@@ -404,6 +416,9 @@ export async function initApp(runCommand: (cmd: string) => void) {
   const [settings, projects, limits] = await Promise.all([api.getSettings(), api.projects.list(), api.agentLimits()])
   const openIds = projects.filter((p) => p.isOpen).sort((a, b) => a.tabOrder - b.tabOrder).map((p) => p.id)
   setApp({ settings, projects, limits, openIds, ready: true, setupOpen: !settings.setupComplete && projects.length === 0 })
+  for (const projectId of openIds) void api.permissions.pending(projectId).then(requests => {
+    setApp(s => ({ approvals: { ...s.approvals, ...Object.fromEntries(requests.filter(r => !settledApprovals.has(r.id)).map(r => [r.id, r])) } }))
+  }).catch(() => {})
   applyTheme()
   api.self
     .status()

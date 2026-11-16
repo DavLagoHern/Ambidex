@@ -65,7 +65,7 @@ npm run dist:dmg
 npm run install:app
 ```
 
-Seventeen native integration checks run the real Rust host and WebKit, using disposable
+Nineteen native integration checks run the real Rust host and WebKit, using disposable
 repositories, an isolated database, a loopback web page and simulated CLIs. They cover engine sleep/wake, persistence after exit, one-time delivery of commands across windows, deferred Monaco loading, native title-bar double click and resize, and contained review tabs/diffs at 640 px:
 
 ```sh

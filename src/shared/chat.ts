@@ -122,6 +122,9 @@ export function finalizeTurn(items: ChatItem[], interrupted: boolean): ChatItem[
     } else if (it.type === 'tool' && it.status === 'running') {
       items[i] = { ...it, status: interrupted ? 'error' : 'done' }
       changed.push(items[i])
+    } else if (it.type === 'approval' && it.request.state === 'pending') {
+      items[i] = { ...it, request: { ...it.request, state: interrupted ? 'cancelled' : 'expired' } }
+      changed.push(items[i])
     }
   }
   return changed.reverse()
@@ -139,6 +142,8 @@ export function searchText(item: ChatItem): string | null {
       return item.files.map((f) => f.path).join(' ')
     case 'error':
       return item.text
+    case 'approval':
+      return `${item.request.title} ${item.request.command ?? ''} ${item.request.reason ?? ''}`
     default:
       return null
   }

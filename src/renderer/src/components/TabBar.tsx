@@ -113,6 +113,7 @@ function ProjectTab({ p, active, index, side, askColor }: { p: ProjectMeta; acti
   )
   const busy = busyKey ? busyKey.split(',') : []
   const changes = useApp((s) => s.changes[p.id] ?? 0)
+  const approvals = useApp(s => Object.values(s.approvals).filter(r => r.projectId === p.id).length)
   const finished = useApp((s) => s.finished[p.id])
   const [drag, setDrag] = useState<'before' | 'after' | null>(null)
   const agents = AGENTS.filter((a) => busy.includes(a))
@@ -159,6 +160,7 @@ function ProjectTab({ p, active, index, side, askColor }: { p: ProjectMeta; acti
       <span className="ptab-avatar">{p.name.slice(0, 1).toUpperCase()}</span>
       {!p.pinned && <span className="ptab-name ellipsis">{p.name}</span>}
       {side && <span className="ptab-side">{side}</span>}
+      {approvals > 0 && <span className="ptab-approval" title={`${approvals} permiso${approvals === 1 ? '' : 's'} pendiente${approvals === 1 ? '' : 's'}`}><Icon.shield size={12} />{approvals > 1 ? approvals : null}</span>}
       {agents.length > 0 && (
         <span className="ptab-agents" title={`${busy.length} agente${busy.length === 1 ? '' : 's'} trabajando`}>
           {agents.map((a) => (

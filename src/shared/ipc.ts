@@ -1,7 +1,8 @@
 import type {
   AgentId, AgentInfo, AgentLimits, ResetCreditOutcome, AppInfo, AppUpdate, ChatItem, CliUpdate, JevStatus, JevTest, CommitDetail, DevScript, DirEntry, Extensions, ExternalSession, FileContent, GitBranch, GitCommit, GitLogEntry,
   GitStatus, GitWorktree, GrepHit, NativeMenuItem, ProjectMeta, ProjectPatch, QueuedMessage, RouteDecision, RunInfo, RunLogLine,
-  SearchHit, SessionCreate, SessionMeta, SessionPatch, Settings, ThreadMeta, UndoFile, WebIssue
+  SearchHit, SessionCreate, SessionMeta, SessionPatch, Settings, ThreadMeta, UndoFile, WebIssue,
+  ApprovalRequest, ApprovalDecision, ApprovalState, SessionGrant
 } from './types'
 import type { FileChange, OrchStart, Orchestration, PlanTask } from './orchestrator'
 
@@ -55,6 +56,10 @@ export interface IpcContract {
   'runs:undoPreview': (runId: string) => { files: UndoFile[]; overlapping: number }
   'runs:undo': (runId: string) => { restored: string[]; deleted: string[]; skipped: string[] }
   'sessions:cancel': (id: string) => void
+  'perm:answer': (id: string, decision: ApprovalDecision) => { ok: boolean; state: ApprovalState }
+  'perm:pending': (projectId: string) => ApprovalRequest[]
+  'perm:grants': (sessionId: string) => SessionGrant[]
+  'perm:revoke': (id: string) => void
   // Claude Code: resume la conversación para seguir con menos contexto
   'sessions:compact': (id: string) => void
   'runs:recent': (projectId: string, limit: number) => RunInfo[]
@@ -187,6 +192,8 @@ export type SenderChannel = 'web:popout' | 'web:setOnTop' | 'web:favicon' | 'web
 
 // Eventos proceso principal → renderer
 export interface PushContract {
+  'perm:changed': ApprovalRequest
+  'perm:grantsChanged': { sessionId: string }
   'session:items': { projectId: string; sessionId: string; items: ChatItem[] }
   'session:meta': SessionMeta
   'run:status': RunInfo

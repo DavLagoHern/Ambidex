@@ -8,7 +8,7 @@ import { homedir } from 'os'
 import { basename, join } from 'path'
 import { createInterface } from 'readline'
 import type { PushChannel, PushContract, IpcContract } from '@shared/ipc'
-import type { AgentId, AgentInfo, AgentLimits, Settings } from '@shared/types'
+import type { AgentId, AgentInfo, AgentLimits, Settings, ApprovalRequest } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY } from '@shared/types'
 import { openDatabase } from '../main/db/database'
 import { Store } from '../main/db/store'
@@ -72,7 +72,13 @@ async function refreshAgents() {
   return agentInfo
 }
 const available = (agent: AgentId) => { const a = agentInfo.find(a => a.agent === agent); return !a || (!!a.path && a.auth?.loggedIn !== false) }
-const push = <K extends PushChannel>(channel: K, payload: PushContract[K]) => send({ event: channel, payload })
+const push = <K extends PushChannel>(channel: K, payload: PushContract[K]) => {
+  send({ event: channel, payload })
+  if (channel === 'perm:changed' && (payload as ApprovalRequest).state === 'pending') {
+    const request = payload as ApprovalRequest
+    send({ event: 'native:finished', payload: { projectId: request.projectId, agent: request.agent, status: 'approval', sessionTitle: request.title } })
+  }
+}
 const updateDockBadge = () => send({ event: 'native:busy', payload: service.runningCount() })
 const browser = new NativeBrowser(host)
 const webAgent = createWebAgent({
@@ -207,6 +213,7 @@ function handlers(): Handlers { return {
 'projects:forget': (id) => {
       if (store.listSessions(id).some((s) => service.isRunning(s.id))) throw new Error('Hay agentes trabajando en este proyecto')
       store.audit(id, 'user', 'project.forget', {})
+      service.permissions.forgetProject(id)
       store.forgetProject(id)
       files.unwatch(id)
     },
@@ -228,6 +235,7 @@ function handlers(): Handlers { return {
 'sessions:update': (id, patch) => service.withRunState(store.updateSession(id, patch)),
 'sessions:delete': (id) => {
       if (service.isRunning(id)) throw new Error('Detén el agente antes de borrar la conversación')
+      service.permissions.forgetSession(id)
       store.deleteSession(id)
     },
 'sessions:messages': (id) => store.messages(id),
@@ -245,6 +253,10 @@ function handlers(): Handlers { return {
       return { runId }
     },
 'sessions:cancel': (id) => service.cancel(id),
+'perm:answer': (id, decision) => service.permissions.answer(id, decision),
+'perm:pending': (projectId) => service.permissions.list(projectId),
+'perm:grants': (sessionId) => service.permissions.listGrants(sessionId),
+'perm:revoke': (id) => service.revokePermission(id),
 'sessions:compact': (id) => void service.compact(id),
 'runs:undoPreview': async (runId) => {
       const c = undoable(runId)
@@ -273,6 +285,7 @@ function handlers(): Handlers { return {
 'threads:delete': (id) => {
       const t = store.getThread(id)
       if (t && Object.values(t.sessions).some((sid) => sid && service.isRunning(sid))) throw new Error('Detén los agentes antes de borrar la conversación')
+      if (t) for (const sid of Object.values(t.sessions)) if (sid) service.permissions.forgetSession(sid)
       store.deleteThread(id)
     },
 'threads:preview': (threadId, text) => dispatcher.preview(threadId, text),
@@ -454,6 +467,7 @@ const api: Record<string, (...args: any[]) => any> = handlers() as any
 api['extensions:list'] = (root?: string) => scanExtensions(homedir(), codexHome(), root ? guard.check(root) : undefined)
 api['project:devScripts'] = (dir: string) => detectDevScripts(guard.check(dir))
 api['engine:canSleep'] = () => service.runningCount() === 0
+  && service.permissions.grantCount() === 0
   && !store.listProjects().some(p => orchestrator.list(p.id).some(o => ACTIVE_STATUSES.includes(o.status)))
   && !updater.status().some(s => ['checking','updating'].includes(s.state))
   && !['checking','pulling','building','ready'].includes(appUpdater.status().state)

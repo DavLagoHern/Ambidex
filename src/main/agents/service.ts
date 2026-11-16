@@ -3,11 +3,12 @@ import { existsSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { PushChannel, PushContract } from '@shared/ipc'
-import type { AgentEvent, AgentId, ChatItem, RouteDecision, RunInfo, RunStatus, SessionMeta, SessionTotals } from '@shared/types'
+import type { AgentEvent, AgentId, ApprovalRequest, ChatItem, RouteDecision, RunInfo, RunStatus, SessionMeta, SessionTotals } from '@shared/types'
 import { finalizeTurn, reduceEvent, titleFromPrompt } from '@shared/chat'
 import type { Store } from '../db/store'
 import type { Adapter, Parser, RunRequest } from './types'
 import { killGroup, ManagedProcess, pidMatches, type AgentProcess, type ProcessHandlers, type ProcessSpec } from './runner'
+import { PermissionBroker } from './permissions'
 
 export interface ServiceDeps {
   // variables de entorno propias de cada agente (p. ej. el tope de contexto de Claude Code)
@@ -92,8 +93,36 @@ const NEW_TITLE = 'Nueva conversación'
 
 export class SessionService {
   private active = new Map<string, ActiveRun>() // sessionId → ejecución
+  readonly permissions: PermissionBroker
 
-  constructor(private d: ServiceDeps) {}
+  constructor(private d: ServiceDeps) {
+    this.permissions = new PermissionBroker(request => this.approvalChanged(request))
+  }
+
+  private approvalChanged(request: ApprovalRequest) {
+    const run = this.active.get(request.sessionId)
+    if (run && run.id === request.runId) {
+      const item: ChatItem = { id: request.id, type: 'approval', request, at: request.at }
+      const idx = run.items.findIndex(i => i.id === item.id)
+      if (idx < 0) run.items.push(item); else run.items[idx] = item
+      this.track(run, [item], true)
+      this.flushUi(run)
+    }
+    this.d.store.audit(request.projectId, request.decision?.by === 'user' ? 'user' : request.decision?.by === 'grant' ? 'system' : request.agent, 'permission.' + request.state, { id: request.id, sessionId: request.sessionId, runId: request.runId, nativeId: request.nativeId, decision: request.decision })
+    this.d.push('perm:changed', request)
+    if (request.decision?.scope === 'session' && request.decision.by === 'user') this.d.push('perm:grantsChanged', { sessionId: request.sessionId })
+  }
+
+  async revokePermission(id: string) {
+    const grant = this.permissions.getGrant(id)
+    if (!grant) return
+    // El CLI puede tener la regla en sus argumentos: detenerlo la retira también
+    // del proceso actual, además de evitar reutilizarla en turnos posteriores.
+    this.permissions.revoke(id)
+    this.d.push('perm:grantsChanged', { sessionId: grant.sessionId })
+    await this.cancel(grant.sessionId)
+    this.d.store.audit(null, 'user', 'permission.revoke', { id, sessionId: grant.sessionId })
+  }
 
   isRunning(sessionId: string) {
     return this.active.has(sessionId)
@@ -162,6 +191,10 @@ export class SessionService {
       images: images.length ? images : undefined,
       fork: !!session.agentSessionId && !!this.d.forkIfLive?.(session.agent, session.agentSessionId)
     } as RunRequest
+    if (!schema && !session.orchestrationId && !prompt.startsWith('/') && !['bypassPermissions', 'danger-full-access', 'dontAsk'].includes(session.permission ?? '')) {
+      req.approvals = { request: (input, signal) => this.permissions.ask({ runId, sessionId, projectId: session.projectId, agent: session.agent }, input, signal) }
+      if (session.agent === 'claude') req.allowedTools = [...(req.allowedTools ?? []), ...this.permissions.rules(sessionId)]
+    }
     // los comandos («/compact») van como texto; el resto, con la entrada abierta si el agente lo admite
     req.stream = !prompt.startsWith('/') && !!adapter.streams?.(req)
     const args = adapter.buildArgs(req)
@@ -315,6 +348,7 @@ export class SessionService {
   async cancel(sessionId: string) {
     const run = this.active.get(sessionId)
     if (!run) return
+    this.permissions.endRun(run.id, 'cancelled')
     // aún no había arrancado (estaba haciendo la foto de los ficheros): ya no arrancará
     if (!run.proc) return void (run.cancelled = true)
     this.d.store.audit(run.projectId, 'user', 'agent.cancel', { sessionId, runId: run.id })
@@ -390,6 +424,7 @@ export class SessionService {
 
   private finish(run: ActiveRun, exit: { code: number | null; signal: NodeJS.Signals | null; cancelled: boolean; spawnError?: string }) {
     const { store } = this.d
+    this.permissions.endRun(run.id, exit.cancelled ? 'cancelled' : 'expired')
     run.resolveReady()
     const now = Date.now()
     const changed = finalizeTurn(run.items, exit.cancelled)
@@ -489,7 +524,15 @@ export class SessionService {
       const rows = store.messagesForRun(r.id)
       const items = rows.map((x) => x.item)
       const seqOf = new Map(rows.map((x) => [x.item.id, x.seq]))
-      const changed = finalizeTurn(items, true)
+      const expired: ChatItem[] = []
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]
+        if (item.type === 'approval' && item.request.state === 'pending') {
+          items[i] = { ...item, request: { ...item.request, state: 'expired' } }
+          expired.push(items[i])
+        }
+      }
+      const changed = [...expired, ...finalizeTurn(items, true)]
       for (const it of changed) store.upsertMessage(r.sessionId, seqOf.get(it.id)!, r.id, it)
       const notice: ChatItem = {
         id: randomUUID(),

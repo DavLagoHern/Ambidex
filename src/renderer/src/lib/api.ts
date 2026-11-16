@@ -66,6 +66,10 @@ export const api = {
     undo: bind('runs:undo')
   },
   runs: { recent: bind('runs:recent'), log: bind('runs:log') },
+  permissions: {
+    answer: bind('perm:answer'), pending: bind('perm:pending'),
+    grants: bind('perm:grants'), revoke: bind('perm:revoke')
+  },
 
   jev: {
     status: bind('jev:status'),

@@ -29,12 +29,19 @@ for(const agent of ['claude','codex'])copyFileSync(join(cwd,'tests/fixtures/'+ag
 const engineCopy=join(dir,'engine.mjs');copyFileSync(join(cwd,'out/engine/index.mjs'),engineCopy)
 const shell=join(dir,'shell');writeFileSync(shell,'#!/bin/sh\nexec /bin/zsh -f -i\n',{mode:0o755})
 const fake = {}
+const approvalPaths = {}
 for (const agent of ['claude','codex']) {
   const path = join(dir,agent)
   const version = agent==='claude'?'Claude 2.1.316':'codex-cli 0.155.1'
   const auth = agent==='claude'?'{"loggedIn":true,"authMethod":"claude.ai"}':'Logged in using ChatGPT'
   writeFileSync(path,`#!/bin/sh\nif [ "$1" = "debug" ]; then printf '%s\n' '{"models":[{"slug":"gpt-6.1-sol","visibility":"list","supported_reasoning_levels":["medium"]}]}'; exit 0; fi\nif [ "$1" = "--version" ]; then printf '%s\\n' ${quote(version)}; exit 0; fi\nif [ "$1" = "auth" ] || [ "$1" = "login" ]; then printf '%s\\n' ${quote(auth)}; exit 0; fi\nexport FAKE_FIXTURE=${quote(join(fixtures,agent+'-stream.jsonl'))}\nexec ${quote(process.execPath)} ${quote(fakeCli)} "$@"\n`,{mode:0o755})
   fake[agent+'Path']=path
+  const approvalFixture=join(dir,'approval-'+agent+'.mjs')
+  copyFileSync(join(cwd,'tests/fixtures',agent==='claude'?'fake-claude-permissions.mjs':'fake-codex-app-server.mjs'),approvalFixture)
+  const approvalPath=join(dir,agent+'-approval')
+  const request=JSON.stringify([{id:0,method:'item/commandExecution/requestApproval',params:{command:'printf AMBIDEX_PERMISSION',cwd:root}}])
+  writeFileSync(approvalPath,`#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "auth" ] || [ "$1" = "login" ] || [ "$1" = "debug" ]; then exec ${quote(path)} "$@"; fi\nexport FAKE_CLAUDE_BACKGROUND=1\nexport FAKE_APPROVAL_REQUESTS=${quote(request)}\nexec ${quote(process.execPath)} ${quote(approvalFixture)} "$@"\n`,{mode:0o755})
+  approvalPaths[agent+'Path']=approvalPath
 }
 const env = {...process.env,AMBIDEX_USER_DATA:data,AMBIDEX_TEST:'1',FAKE_HOLD_MS:'400',FAKE_MODE:'replay'}
 // Seed with the same engine used by the desktop host, then close it before opening the app.
@@ -59,6 +66,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r))
 const report=join(dir,'report.json')
 const context={root,reviewPath,url:`http://127.0.0.1:${server.address().port}`,png:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII='}
 const binary=process.env.E2E_APP||join(cwd,'src-tauri/target/debug/ambidex')
+context.approvalPaths=approvalPaths;context.normalPaths=fake
 assert(existsSync(binary),'Build first: npm run build:assets && cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml')
 // Launch a proper .app through Launch Services. Unbundled macOS WebKit views can suspend timers
 // when another test panel takes focus, which makes a long UI test wait indefinitely.
@@ -90,7 +98,7 @@ try {
   assert(existsSync(report),'Native test produced no report. '+(existsSync(report+'.progress')?readFileSync(report+'.progress','utf8'):'No progress')+logs+'\n'+(existsSync(join(data,'logs/engine.log'))?readFileSync(join(data,'logs/engine.log'),'utf8'):''))
   result=JSON.parse(readFileSync(report,'utf8'))
   for(const test of result.results)console.log(`${test.ok?'✓':'✗'} ${test.name}${test.ok?` (${test.ms} ms)`:'\n'+test.error}`)
-  assert(result.results.length===17,'Not all native checks ran')
+  assert(result.results.length===19,'Not all native checks ran')
   assert(result.results.every(t=>t.ok),'Some native tests failed. '+logs)
   console.log('All native WebKit integration checks passed.')
 } finally {

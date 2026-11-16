@@ -5254,3 +5254,18 @@ button.sb-item:hover {
   .tabbar-right .layout-ctl > button:not(:last-child) { display: none; }
   .tabbar { gap: 5px; }
 }
+.approval-card { margin: 10px 0; padding: 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-panel); display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.approval-pending { border-color: #ca9645; }
+.approval-heading, .approval-actions, .approval-grant { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.approval-heading .small { margin-left: auto; }
+.approval-command { margin: 0; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--bg-app); border-radius: 4px; }
+.approval-paths { overflow-wrap: anywhere; white-space: pre-wrap; }
+.approval-files { max-height: 80px; overflow: auto; }
+.approval-cwd { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.approval-remember { flex-basis: 100%; }
+.approval-card details summary { cursor: pointer; }
+.approval-card details[open] summary { margin-bottom: 8px; }
+.approval-grant { padding: 6px 0; border-top: 1px solid var(--border); }
+.approval-grant > span { flex: 1; min-width: 0; }
+.approval-expired, .approval-cancelled { color: var(--text-2); }
+.ptab-approval { display: inline-flex; align-items: center; gap: 3px; color: #ca9645; }

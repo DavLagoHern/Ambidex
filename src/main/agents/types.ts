@@ -1,5 +1,14 @@
-import type { AgentEvent, AgentId, Permission } from '@shared/types'
+import type { AgentEvent, AgentId, Permission, ApprovalRequest, ApprovalDecision } from '@shared/types'
 import type { AgentProcess, ProcessHandlers, ProcessSpec } from './runner'
+
+export interface NativeApproval extends Pick<ApprovalRequest, 'nativeId' | 'kind' | 'title' | 'tool' | 'command' | 'cwd' | 'paths' | 'reason' | 'subagent'> {
+  // La clave corresponde exactamente a la acción solicitada, nunca a un prefijo.
+  grantKey?: string
+  claudeRules?: string[]
+}
+export interface ApprovalHost {
+  request(input: NativeApproval, signal: AbortSignal): Promise<ApprovalDecision>
+}
 
 export interface RunRequest {
   cwd: string
@@ -19,6 +28,7 @@ export interface RunRequest {
   fork?: boolean
   // la entrada queda abierta para añadir mensajes durante el turno (ver Adapter.steer)
   stream?: boolean
+  approvals?: ApprovalHost
 }
 
 export interface Parser {

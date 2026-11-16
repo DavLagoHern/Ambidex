@@ -1,0 +1,769 @@
+{
+  "date": "2026-11-14",
+  "baseCommit": "f6d9ef1700c3cb6a80f127eaef4dbd1834405f51",
+  "codexVersion": "0.169.0",
+  "model": "gpt-6-luna",
+  "effort": "low",
+  "scope": "Pruebas reales del app-server en repositorios temporales, sin peticiones de red desde las herramientas probadas, instalaciones ni cambios de código en Ambidex.",
+  "confirmed": [
+    "Un printf dentro del sandbox no pidió aprobación.",
+    "Una ejecución solicitada con ampliación de sandbox emitió item/commandExecution/requestApproval.",
+    "acceptForSession evitó otra aprobación del mismo comando en un turno posterior del mismo proceso.",
+    "Al cerrar el proceso y reanudar el mismo hilo, el mismo comando volvió a pedir aprobación.",
+    "decline rechazó el comando y el turno pudo terminar completed.",
+    "cancel terminó el turno como interrupted.",
+    "turn/interrupt emitió serverRequest/resolved, que puede llegar después de turn/completed.",
+    "request_permissions_tool está desactivada por defecto; habilitada emitió item/permissions/requestApproval para red y archivos.",
+    "Se probaron concesión de red y denegación de permisos con permissions vacío, sin realizar peticiones de red.",
+    "apply_patch fuera del workspace emitió item/fileChange/requestApproval: accept creó el archivo de prueba y decline no lo creó.",
+    "El runtime incluyó availableDecisions incluso sin solicitar experimentalApi; el cliente no depende de ese campo."
+  ],
+  "notEstablished": [
+    "No se observaron métodos antiguos; no se concluye que no puedan emitirse.",
+    "Los casos simultáneos y las respuestas tardías se cubren con el app-server simulado; no se han forzado en el modelo real.",
+    "La tarjeta de la interfaz y las reglas de conversación son responsabilidad del broker y requieren integración de Claude."
+  ],
+  "rawProtocolRuns": [
+    {
+      "cases": [
+        {
+          "name": "sandbox-local",
+          "status": "completed",
+          "decision": "accept",
+          "requests": [],
+          "resolved": [],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-3b610d43-d981-4d99-9b33-3ee0fafb0596",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_LOCAL'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": "7437",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_LOCAL"
+                }
+              ],
+              "aggregatedOutput": "AMBIDEX_S2_LOCAL",
+              "exitCode": 0,
+              "durationMs": 0,
+              "startedAtMs": 1794683554507,
+              "completedAtMs": 1794683554507
+            }
+          ],
+          "messages": [
+            "AMBIDEX_S2_LOCAL"
+          ],
+          "errors": []
+        },
+        {
+          "name": "session-first",
+          "status": "completed",
+          "decision": "acceptForSession",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 0,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+                "turnId": "01a1db79-cfbc-7641-b2b1-e202aa6cee28",
+                "itemId": "exec-93df4d0e-f38a-4b21-9403-525ad531c3c7",
+                "startedAtMs": 1794683558857,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_SESSION'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_SESSION"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_SESSION"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_SESSION"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+              "requestId": 0
+            }
+          ],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-93df4d0e-f38a-4b21-9403-525ad531c3c7",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_SESSION'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": "62217",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_SESSION"
+                }
+              ],
+              "aggregatedOutput": "AMBIDEX_S2_SESSION",
+              "exitCode": 0,
+              "durationMs": 0,
+              "startedAtMs": 1794683558857,
+              "completedAtMs": 1794683558896
+            }
+          ],
+          "messages": [
+            "AMBIDEX_S2_SESSION"
+          ],
+          "errors": []
+        },
+        {
+          "name": "session-same-process",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [],
+          "resolved": [],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-247a6f48-8857-4502-a65a-0b8dba775442",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_SESSION'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": "87443",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_SESSION"
+                }
+              ],
+              "aggregatedOutput": "AMBIDEX_S2_SESSION",
+              "exitCode": 0,
+              "durationMs": 0,
+              "startedAtMs": 1794683562641,
+              "completedAtMs": 1794683562641
+            }
+          ],
+          "messages": [
+            "AMBIDEX_S2_SESSION"
+          ],
+          "errors": []
+        },
+        {
+          "name": "session-new-process",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 0,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+                "turnId": "01a1db79-f679-71a0-805e-5f0f597609eb",
+                "itemId": "exec-f905a91e-b4a2-40c1-8428-9bf3e2239c09",
+                "startedAtMs": 1794683570264,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_SESSION'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_SESSION"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_SESSION"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_SESSION"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+              "requestId": 0
+            }
+          ],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-f905a91e-b4a2-40c1-8428-9bf3e2239c09",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_SESSION'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": null,
+              "source": "agent",
+              "status": "declined",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_SESSION"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null,
+              "startedAtMs": 1794683570264,
+              "completedAtMs": 1794683570265
+            }
+          ],
+          "messages": [
+            "Execution was rejected, so there’s no output."
+          ],
+          "errors": []
+        },
+        {
+          "name": "decline",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 1,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+                "turnId": "01a1db7a-0e14-7221-8412-76e89f79a46e",
+                "itemId": "exec-1dc28aeb-c00e-4dcd-a22d-4193123c3836",
+                "startedAtMs": 1794683574250,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_DECLINED'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_DECLINED"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_DECLINED"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_DECLINED"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+              "requestId": 1
+            }
+          ],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-1dc28aeb-c00e-4dcd-a22d-4193123c3836",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_DECLINED'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": null,
+              "source": "agent",
+              "status": "declined",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_DECLINED"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null,
+              "startedAtMs": 1794683574250,
+              "completedAtMs": 1794683574250
+            }
+          ],
+          "messages": [
+            "Execution was rejected; no output was produced."
+          ],
+          "errors": []
+        },
+        {
+          "name": "cancel",
+          "status": "interrupted",
+          "decision": "cancel",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 2,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+                "turnId": "01a1db7a-1e8d-7911-8d47-0845bde4e484",
+                "itemId": "exec-4427b1ba-908d-4c96-b89f-bffed0d50109",
+                "startedAtMs": 1794683579304,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_CANCELLED'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_CANCELLED"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_CANCELLED"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_CANCELLED"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+              "requestId": 2
+            }
+          ],
+          "commands": [
+            {
+              "type": "commandExecution",
+              "id": "exec-4427b1ba-908d-4c96-b89f-bffed0d50109",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/zsh -lc 'printf AMBIDEX_S2_CANCELLED'",
+              "cwd": "$PROBE_ROOT/workspace",
+              "processId": null,
+              "source": "agent",
+              "status": "declined",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf AMBIDEX_S2_CANCELLED"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null,
+              "startedAtMs": 1794683579304,
+              "completedAtMs": 1794683579305
+            }
+          ],
+          "messages": [],
+          "errors": []
+        },
+        {
+          "name": "interrupt-pending",
+          "status": "interrupted",
+          "decision": "turn/interrupt",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 3,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+                "turnId": "01a1db7a-2bb3-7721-aff4-019054dbc597",
+                "itemId": "exec-971b4fe6-e192-46d5-8199-e23858073350",
+                "startedAtMs": 1794683582266,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_INTERRUPTED'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_INTERRUPTED"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_INTERRUPTED"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_INTERRUPTED"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [],
+          "commands": [],
+          "messages": [],
+          "errors": []
+        },
+        {
+          "name": "permissions-tool-disabled",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [],
+          "commands": [],
+          "messages": [
+            "I can’t request network access because no `request_permissions` tool is available."
+          ],
+          "errors": [],
+          "resolvedFromPreviousTurn": [
+            {
+              "threadId": "01a1db79-b3ef-7492-96a5-52e5a668779d",
+              "requestId": 3
+            }
+          ]
+        }
+      ],
+      "files": null
+    },
+    {
+      "cases": [
+        {
+          "name": "permissions-enabled",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [
+            {
+              "method": "item/permissions/requestApproval",
+              "id": 0,
+              "params": {
+                "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+                "turnId": "01a1db7b-9d43-7cb1-9b56-3230d59a544b",
+                "itemId": "exec-ca1768ed-2b64-4eb2-8a5e-9db6309e1cc4",
+                "environmentId": "local",
+                "startedAtMs": 1794683678320,
+                "cwd": "$PROBE_ROOT/workspace",
+                "reason": "May I request network access for this permission-protocol test? I will not make any network requests.",
+                "permissions": {
+                  "network": {
+                    "enabled": true
+                  },
+                  "fileSystem": null
+                }
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+              "requestId": 0
+            }
+          ],
+          "commands": [],
+          "messages": [
+            "The permission request returned; no network requests, commands, or file edits were made."
+          ],
+          "errors": []
+        },
+        {
+          "name": "file-permission-request-denied-by-empty-grant",
+          "status": "completed",
+          "decision": "accept",
+          "requests": [
+            {
+              "method": "item/permissions/requestApproval",
+              "id": 1,
+              "params": {
+                "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+                "turnId": "01a1db7b-b77b-7dc2-b7ed-706c985e3964",
+                "itemId": "exec-c364ba6b-10da-453e-942c-4f44c3431be1",
+                "environmentId": "local",
+                "startedAtMs": 1794683687566,
+                "cwd": "$PROBE_ROOT/workspace",
+                "reason": "May I write the requested disposable test file just outside the workspace?",
+                "permissions": {
+                  "network": null,
+                  "fileSystem": {
+                    "read": null,
+                    "write": [
+                      "$PROBE_ROOT/outside-accepted.txt"
+                    ],
+                    "entries": [
+                      {
+                        "path": {
+                          "type": "path",
+                          "path": "$PROBE_ROOT/outside-accepted.txt"
+                        },
+                        "access": "write"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+              "requestId": 1
+            }
+          ],
+          "commands": [],
+          "messages": [
+            "I couldn’t create the file because write access to that path wasn’t granted."
+          ],
+          "errors": []
+        },
+        {
+          "name": "file-decline",
+          "status": "completed",
+          "decision": "decline",
+          "requests": [
+            {
+              "method": "item/fileChange/requestApproval",
+              "id": 2,
+              "params": {
+                "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+                "turnId": "01a1db7b-de21-7c23-ac10-45bbc472c9e8",
+                "itemId": "exec-418c6fdb-3d2c-482f-90e4-d71d1f37710f",
+                "startedAtMs": 1794683697114,
+                "reason": null,
+                "grantRoot": null
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+              "requestId": 2
+            }
+          ],
+          "commands": [],
+          "messages": [
+            "The patch was rejected, so the file was not created."
+          ],
+          "errors": []
+        },
+        {
+          "name": "interrupt-pending-drained",
+          "status": "interrupted",
+          "decision": "turn/interrupt",
+          "requests": [
+            {
+              "method": "item/commandExecution/requestApproval",
+              "id": 3,
+              "params": {
+                "kind": "command",
+                "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+                "turnId": "01a1db7c-005e-7112-822d-a07eaae1fc4f",
+                "itemId": "exec-aaebedfa-9443-4947-9d9d-62676e1434e1",
+                "startedAtMs": 1794683701840,
+                "environmentId": "local",
+                "reason": "Ambidex permission protocol test: prints a local marker only",
+                "command": "/bin/zsh -lc 'printf AMBIDEX_S2_INTERRUPT_DRAINED'",
+                "cwd": "$PROBE_ROOT/workspace",
+                "commandActions": [
+                  {
+                    "type": "unknown",
+                    "command": "printf AMBIDEX_S2_INTERRUPT_DRAINED"
+                  }
+                ],
+                "proposedExecpolicyAmendment": [
+                  "printf",
+                  "AMBIDEX_S2_INTERRUPT_DRAINED"
+                ],
+                "availableDecisions": [
+                  "accept",
+                  {
+                    "acceptWithExecpolicyAmendment": {
+                      "execpolicy_amendment": [
+                        "printf",
+                        "AMBIDEX_S2_INTERRUPT_DRAINED"
+                      ]
+                    }
+                  },
+                  "cancel"
+                ]
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7b-9b01-7c21-8d2c-d8fc179c86cd",
+              "requestId": 3
+            }
+          ],
+          "commands": [],
+          "messages": [],
+          "errors": []
+        }
+      ],
+      "files": {
+        "accepted": false,
+        "declined": false
+      }
+    },
+    {
+      "cases": [
+        {
+          "name": "permissions-allow",
+          "status": "completed",
+          "decision": "accept",
+          "requests": [
+            {
+              "method": "item/permissions/requestApproval",
+              "id": 0,
+              "params": {
+                "threadId": "01a1db7d-7d72-7a42-8c5e-d8b271fde5c4",
+                "turnId": "01a1db7d-8169-7a40-885c-ec645f1dc0eb",
+                "itemId": "exec-5d367a06-c99c-44a2-8263-cc3a74ce6712",
+                "environmentId": "local",
+                "startedAtMs": 1794683802500,
+                "cwd": "$PROBE_ROOT/workspace",
+                "reason": "Requesting network access solely to test the permission protocol; I will not make any network requests.",
+                "permissions": {
+                  "network": {
+                    "enabled": true
+                  },
+                  "fileSystem": null
+                }
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7d-7d72-7a42-8c5e-d8b271fde5c4",
+              "requestId": 0
+            }
+          ],
+          "commands": [],
+          "messages": [
+            "Network access permission was granted for this turn. I made no network requests."
+          ],
+          "errors": []
+        },
+        {
+          "name": "file-allow-direct",
+          "status": "completed",
+          "decision": "accept",
+          "requests": [
+            {
+              "method": "item/fileChange/requestApproval",
+              "id": 0,
+              "params": {
+                "threadId": "01a1db7d-9be0-7252-9567-38df991acb14",
+                "turnId": "01a1db7d-9c21-7d33-b15e-3bf3253628dc",
+                "itemId": "exec-b8f57ecd-92ff-4dd1-ad1c-a1c888edddae",
+                "startedAtMs": 1794683809377,
+                "reason": null,
+                "grantRoot": null
+              }
+            }
+          ],
+          "resolved": [
+            {
+              "threadId": "01a1db7d-9be0-7252-9567-38df991acb14",
+              "requestId": 0
+            }
+          ],
+          "commands": [],
+          "messages": [
+            "Done."
+          ],
+          "errors": []
+        }
+      ],
+      "files": {
+        "accepted": true
+      }
+    }
+  ],
+  "implementedAdapterRealRun": [
+    {
+      "action": "allow",
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "cancelled": false
+      },
+      "requests": [
+        {
+          "method": "item/commandExecution/requestApproval",
+          "command": "/bin/zsh -lc 'printf AMBIDEX_ADAPTER_TEST'"
+        }
+      ],
+      "endings": [
+        "answered"
+      ],
+      "commandStatus": "completed",
+      "output": "AMBIDEX_ADAPTER_TEST"
+    },
+    {
+      "action": "deny",
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "cancelled": false
+      },
+      "requests": [
+        {
+          "method": "item/commandExecution/requestApproval",
+          "command": "/bin/zsh -lc 'printf AMBIDEX_ADAPTER_TEST'"
+        }
+      ],
+      "endings": [
+        "answered"
+      ],
+      "commandStatus": "declined",
+      "output": null
+    }
+  ]
+}

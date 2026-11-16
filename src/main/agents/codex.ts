@@ -5,6 +5,14 @@ import { join } from 'path'
 import type { AgentEvent, AgentLimits, AgentModel, CodexSandbox, LimitWindow } from '@shared/types'
 import { Adapter, parseJson, RunRequest, short } from './types'
 import { CodexLiveProcess } from './codex-live'
+import type { CodexApprovalHandler } from './codex-approvals'
+import { approvalFromCodex } from './codex-approvals'
+
+export interface CodexAdapterOptions {
+  // El servicio devuelve un puente solo para los turnos interactivos del chat.
+  // Sin puente, Equipo y los consumidores actuales conservan approvalPolicy=never.
+  approvals?: (request: RunRequest) => CodexApprovalHandler | undefined
+}
 
 const SANDBOXES: CodexSandbox[] = ['read-only', 'workspace-write', 'danger-full-access']
 
@@ -198,7 +206,7 @@ function toolItem(item: any, done: boolean): AgentEvent | null {
   }
 }
 
-export function createCodexAdapter(home = codexHome()): Adapter {
+export function createCodexAdapter(home = codexHome(), options: CodexAdapterOptions = {}): Adapter {
   return {
     agent: 'codex',
 
@@ -218,7 +226,12 @@ export function createCodexAdapter(home = codexHome()): Adapter {
     },
 
     streams: (req) => !req.schema,
-    startProcess: (spec, req, handlers) => new CodexLiveProcess(spec, req, handlers),
+    startProcess: (spec, req, handlers) => new CodexLiveProcess(spec, req, handlers, options.approvals?.(req) ?? (req.approvals ? {
+      request: async (request, signal) => {
+        const decision = await req.approvals!.request(approvalFromCodex(request, req.cwd), signal)
+        return { action: decision.allow ? 'allow' : 'deny' }
+      }
+    } : undefined)),
 
     createParser() {
       let threadId: string | undefined
@@ -229,6 +242,9 @@ export function createCodexAdapter(home = codexHome()): Adapter {
           if (!d || typeof d !== 'object') return []
           const out: AgentEvent[] = []
           switch (d.type) {
+            case 'ambidex.permission_error':
+              out.push({ kind: 'notice', text: String(d.message) })
+              break
             case 'thread.started':
               threadId = d.thread_id
               out.push({ kind: 'session', sessionId: d.thread_id })

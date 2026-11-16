@@ -12,6 +12,11 @@
   const check=async(name,fn)=>{await progress({name,phase:'start',hidden:document.hidden,focused:document.hasFocus(),text:document.body.innerText.slice(0,500),results});const start=performance.now();try{await fn();results.push({name,ok:true,ms:Math.round(performance.now()-start)})}catch(e){results.push({name,ok:false,error:String(e)+'\n'+String(e.stack||'')})}await progress({name,phase:'done',results})};
   const assert=(v,message='Comprobación fallida')=>{if(!v)throw Error(message)};
   await until(()=>window.bridge);
+  // WebKit can suspend animation timelines in background test windows. Keep
+  // screenshots deterministic without changing the application's stylesheet.
+  const motion=document.createElement('style');
+  motion.textContent='*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}';
+  document.head.append(motion);
   const invoke=(channel,...args)=>window.bridge.invoke(channel,...args);
   const context=await invoke('test:context');
   const {root,url}=context;
@@ -46,6 +51,50 @@
     const started=await invoke('sessions:send',session.id,'Di HOLA');assert(started.runId);
     await until(async()=>{const runs=await invoke('runs:recent',project.id,10);return runs.find(r=>r.id===started.runId&&r.status!=='running')});
     const messages=await invoke('sessions:messages',session.id);assert(received);assert(messages.some(m=>m.type==='assistant'&&m.text.includes('HOLA')),JSON.stringify(messages));off();
+  });
+  for(const agent of ['claude','codex'])await check(agent+' live approval card answers through native IPC',async()=>{
+    await invoke('settings:save',{[agent+'Path']:context.approvalPaths[agent+'Path']});
+    const title='Permiso nativo '+agent;
+    const current=await invoke('sessions:create',project.id,{agent,title,permission:agent==='claude'?'manual':'workspace-write'});
+    await invoke('panel:sync',project.id,'permission-test',{layout:'chat',sidebar:'chats',panels:{sidebar:true,right:false,activity:false,bottom:false}});
+    const run=await invoke('sessions:send',current.id,'Pide permiso para el comando');
+    const row=await until(()=>[...document.querySelectorAll('.chat-row')].find(e=>e.textContent.includes(title)));
+    row.click();await sleep(50);
+    const pending=await until(async()=>(await invoke('perm:pending',project.id)).find(r=>r.sessionId===current.id));
+    const card=await until(()=>document.querySelector('[data-approval-id="'+pending.id+'"]'));
+    assert(document.querySelector('.ptab-approval'),'Missing project approval indicator');
+    assert(await invoke('test:park')===false,'The pending approval was parked');
+    await invoke('test:window',{width:640,height:720});await until(()=>innerWidth===640);await sleep(80);
+    assert(card.scrollWidth<=card.clientWidth+1,'The permission card overflows');
+    assert(document.documentElement.scrollWidth<=innerWidth+1,'The permission card widens the document');
+    const label=agent==='claude'?'Permitir en esta conversación':'Denegar';
+    const button=[...card.querySelectorAll('button')].find(b=>b.textContent===label);assert(button,label+' missing');
+    const chat=card.closest('.chat');assert(chat,'Approval is outside the chat');
+    for(const action of card.querySelectorAll('.approval-actions button')){
+      const b=action.getBoundingClientRect(),viewport=chat.getBoundingClientRect();
+      assert(b.width>0&&b.height>0&&b.top>=0&&b.bottom<=innerHeight,'Approval actions are outside the window');
+      assert(b.top>=viewport.top-1&&b.bottom<=viewport.bottom+1,'Approval actions require scrolling');
+      assert(action.contains(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2)),'Approval actions are covered by another panel');
+    }
+    if(agent==='claude'){
+      assert(getComputedStyle(card.closest('.workspace')).opacity==='1','The project is transparent');
+      await invoke('test:capture','approval');
+    }
+    button.click();
+    const expected=agent==='claude'?'allowed':'denied';
+    await until(async()=>(await invoke('sessions:messages',current.id)).some(i=>i.type==='approval'&&i.request.id===pending.id&&i.request.state===expected));
+    await until(async()=>(await invoke('runs:recent',project.id,30)).some(r=>r.id===run.runId&&r.status==='completed'));
+    if(agent==='claude'){
+      await until(async()=>(await invoke('perm:grants',current.id)).length===1);
+      assert(await invoke('test:park')===false,'Conversation permissions were lost to engine sleep');
+      const grants=await until(()=>card.querySelector('.approval-grants'));grants.open=true;
+      const revoke=[...grants.querySelectorAll('button')].find(b=>b.textContent==='Revocar');assert(revoke,'Revoke button missing');revoke.click();
+      await until(async()=>(await invoke('perm:grants',current.id)).length===0);
+    }
+    assert((await invoke('perm:pending',project.id)).length===0);
+    const late=await invoke('perm:answer',pending.id,{allow:true,scope:'once'});assert(!late.ok,'A late answer was accepted');
+    await invoke('settings:save',{[agent+'Path']:context.normalPaths[agent+'Path']});
+    await invoke('test:window',{width:1100,height:760});
   });
   await check('Threads, queue and project layout persist',async()=>{
     thread=await invoke('threads:create',project.id);await invoke('threads:rename',thread.id,'Native thread');
@@ -122,8 +171,13 @@
     assert(monacoLoaded(),'The file editor did not load its Monaco assets');
   });
   await check('Native title bar restores on double click and supports a narrow movable window',async()=>{
-    await invoke('test:window',{width:900,height:700,x:180,y:140});
-    await until(()=>innerWidth===900&&innerHeight===700);
+    // Al cambiar de pantalla, macOS puede actualizar la escala después del
+    // movimiento. Fijar el tamaño en una llamada posterior evita mezclarla.
+    await invoke('test:window',{x:180,y:140});
+    await until(async()=>{const b=await invoke('test:window',{});return Math.abs(b.x-180)<2&&Math.abs(b.y-140)<2});
+    await sleep(100);
+    await invoke('test:window',{width:900,height:700});
+    try{await until(()=>innerWidth===900&&innerHeight===700)}catch(error){throw Error(String(error)+' '+JSON.stringify({innerWidth,innerHeight,native:await invoke('test:window',{}),screen:{width:screen.availWidth,height:screen.availHeight}}))}
     assert((await invoke('test:window',{})).resizable,'The main window is not resizable');
     const bar=document.querySelector('.tabbar-drag');
     const doubleClick=()=>{
@@ -149,7 +203,11 @@
     await until(()=>document.querySelector('.diff-editor-host .view-lines')?.textContent.includes('value'));
     const contained=async(width,height)=>{
       await invoke('test:window',{width,height});await until(()=>innerWidth===width&&innerHeight===height);
-      await sleep(100);
+      // Monaco lays out asynchronously after the native resize and React update.
+      await until(()=>{
+        const host=document.querySelector('.diff-editor-host'),editor=host?.querySelector('.monaco-diff-editor');
+        return host&&editor&&host.scrollWidth<=host.clientWidth+1&&Math.abs(host.getBoundingClientRect().width-editor.getBoundingClientRect().width)<3;
+      });
       assert(document.documentElement.scrollWidth<=innerWidth+1,'The document overflows horizontally');
       for(const selector of ['.tabbar','.editor-area','.editor-tabs','.diff-bar','.diff-editor-host']){
         const el=document.querySelector(selector);assert(el,selector+' missing');

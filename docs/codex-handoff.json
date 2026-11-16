@@ -1,0 +1,65 @@
+{
+  "baseCommit": "f6d9ef1700c3cb6a80f127eaef4dbd1834405f51",
+  "branch": "main",
+  "originalWorktree": "../Ambidex-codex-approvals",
+  "status": "Aprobaciones en vivo v1 integradas en la copia principal; cambios locales sin commit.",
+  "owner": "Codex",
+  "approvalIntegration": {
+    "factory": "SessionService proporciona req.approvals al chat; createCodexAdapter lo conecta al transporte. La opción approvals(req) sigue disponible para otros consumidores.",
+    "handler": "CodexApprovalHandler exportado en src/main/agents/codex-approvals.ts",
+    "request": "request({id, method, params, item?}, AbortSignal) devuelve Promise<{action: allow|deny|cancel, permissions?}>",
+    "resolved": "resolved(request, reason) opcional; reason: answered|server-resolved|turn-ended|process-exited|cancelled",
+    "scope": "Devolver handler únicamente para chat interactivo. Devolver undefined para Equipo; la salida estructurada y el acceso total conservan never.",
+    "conversationRules": "Las guarda el broker de Ambidex por conversación/agente; el transporte permite solo la solicitud actual. No genera acceptForSession ni cambios de reglas persistentes.",
+    "permissionProfiles": "Las concesiones de item/permissions/requestApproval tienen scope turn y se limitan al subconjunto solicitado. La UI debe mostrar el alcance.",
+    "cancellation": "Escuchar AbortSignal para retirar una espera caducada. No llega aborto al resolver normalmente; resolved(answered) confirma el envío.",
+    "denialReason": "La respuesta v2 de comandos/archivos no incluye mensaje libre. Guardarlo en audit_log; no prometer que el agente lo recibirá por ese payload."
+  },
+  "checksIntegration": {
+    "module": "src/main/checks.ts",
+    "discovery": "detectChecks(cwd) y detectTestCommand(cwd)",
+    "execution": "new CheckRunner().start(cwd, recipe, {runId?, env?, signal?, onOutput?}) => {id, done, cancel}",
+    "results": "CheckResult: outcome, tree, treeAfter, validity, verified, code, ms, outputTail y receta ejecutada.",
+    "freshness": "verified exige éxito y tree sin cambios; isCheckResultCurrent(result) comprueba ediciones posteriores antes de consumirlo.",
+    "lifecycle": "Incluir runningCount() en engine:canSleep y llamar stop() al cerrar. stop() cancela y espera todos los trabajos; el runner queda cerrado.",
+    "integrationStatus": "Módulo y pruebas preparados. La configuración en Ajustes y la conexión al chat y a Equipo quedan para la fase de verificación; todavía no se ejecutan comprobaciones automáticas al terminar un turno."
+  },
+  "originalAssignmentFiles": [
+    "src/main/agents/codex-live.ts",
+    "src/main/agents/codex.ts",
+    "src/main/agents/codex-approvals.ts",
+    "src/main/checks.ts",
+    "tests/codex-approvals.test.ts",
+    "tests/checks.test.ts",
+    "tests/fixtures/fake-codex-app-server.mjs",
+    "docs/codex-s2-results.json",
+    "docs/codex-handoff.json"
+  ],
+  "pendingIntegration": [
+    "Fase de verificación: añadir la configuración de comprobaciones a Ajustes y conectar el ejecutor al chat y a Equipo.",
+    "Registro de resultados del enrutador, atribución del diff y segunda opinión: fuera de esta integración de aprobaciones."
+  ],
+  "integrated": [
+    "PermissionBroker, contratos IPC, persistencia de tarjetas y registro de decisiones en audit_log.",
+    "Claude por stdio, incluidas aprobaciones de subagentes después del primer result.",
+    "Codex app-server con las respuestas v2 y antiguas, caducidad y cancelación.",
+    "Tarjetas, indicador por proyecto, aviso nativo y permisos de conversación revocables en memoria.",
+    "Los permisos recordados impiden aparcar el motor para conservarlos hasta cerrar la app."
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "unitTests": {
+      "passed": 243,
+      "files": 30,
+      "newTests": 56
+    },
+    "realProtocolCases": 14,
+    "realImplementedAdapterCases": 2,
+    "realClaudeAdapter": "passed: Haiku permite el comando mediante el nuevo transporte stdio y termina correctamente.",
+    "nativeRustTests": { "passed": 3 },
+    "nativeE2E": { "passed": 19, "approvalUi": "Claude y Codex responden desde la tarjeta por IPC nativo; revocación, espera sin aparcar el motor y botones visibles a 640 px. Captura revisada." },
+    "buildAssets": "passed",
+    "patchApplyCheck": "passed against main f6d9ef1"
+  },
+  "originalPatch": "../Ambidex-codex-approvals.patch (solo el trabajo inicial de Codex; no incluye la integración posterior del broker, Claude y la interfaz)"
+}
