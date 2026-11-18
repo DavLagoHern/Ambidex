@@ -2,7 +2,7 @@ import type { PushChannel, PushContract } from '@shared/ipc'
 import type { AgentId, AgentModel, ChatItem, ModelTier, QueuedMessage, RouteDecision, SessionMeta, Settings, ThreadMeta } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY, DEFAULT_ROUTE_PREFS } from '@shared/types'
 import { titleFromPrompt } from '@shared/chat'
-import { aiRoutePrompt, Classification, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, analyzeRoutePrompt, pickEffort, pickModel, weeklyHeadroom, requestsComputerControl, requestsImageGeneration, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
+import { AGENT_REFERENCE, CONTINUATION_CONFIRMATION, aiRoutePrompt, Classification, clearTaskCategory, decideRoute, difficultyCriteria, EFFORT_CONFIDENCE, EFFORT_NAMES, explicitDelegation, analyzeRoutePrompt, pickEffort, pickModel, weeklyHeadroom, requestsComputerControl, requestsImageGeneration, RouteContext, routeCategories, TIER_LABELS } from '@shared/router'
 import type { Store } from '../db/store'
 import type { SessionService } from './service'
 
@@ -32,8 +32,13 @@ const JEV_BUDGET = { send: 3000, preview: 1200 }
 
 const pct = (x?: number) => (x === undefined ? '' : ` ${Math.round(x * 100)} %`)
 
-function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
-  return Promise.race([p.catch(() => undefined), new Promise<undefined>((r) => setTimeout(() => r(undefined), ms))])
+async function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([p.catch(() => undefined), new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms) })])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // modelo y razonamiento que el usuario fijó en el chat único antes de que existiera la conversación de ese agente
@@ -118,8 +123,14 @@ export class Dispatcher {
   async preview(threadId: string | null, text: string): Promise<RouteDecision> {
     const thread = threadId ? this.d.store.getThread(threadId) ?? undefined : undefined
     const ctx = this.routeContext(thread)
+    if (this.hasDirectRoute(text, ctx)) return this.withModel(thread, decideRoute(text, ctx))
     const cls = await this.understand(thread, text, ctx, JEV_BUDGET.preview, true)
     return this.withModel(thread, decideRoute(text, ctx, cls), cls)
+  }
+
+  private hasDirectRoute(text: string, ctx: RouteContext): boolean {
+    const agent = explicitDelegation(text, ctx.lastAgent)
+    return requestsComputerControl(text) || (!!ctx.lastAgent && CONTINUATION_CONFIRMATION.test(text.trim())) || (!!agent && ctx.available[agent])
   }
 
   // `pickAgent`: hace falta saber a quién va (no lo ha elegido el usuario). La dificultad se pregunta siempre que
@@ -145,23 +156,32 @@ export class Dispatcher {
     const ctx = this.routeContext(thread)
     const manual = (agent: AgentId): RouteDecision => ({ agent, reason: `Elegido por ti → ${AGENT_NAMES[agent]}`, method: 'manual' })
     const mode = this.d.settings().routerMode
+    const mention = /^@(claude|codex)\b/i.test(text.trim())
     const withModel = (d: RouteDecision, cls?: Pick<Classification, 'tier' | 'tierConfidence' | 'ultra'>) => this.withModel(thread, d, cls, pins)
     if (requestsImageGeneration(text)) {
       if (!ctx.available.codex) throw new Error('Activa Codex para generar imágenes')
       return withModel({ agent: 'codex', reason: 'Generación de imágenes → Codex', method: 'rules' })
     }
+    if (!override && !mention && this.hasDirectRoute(text, ctx)) return withModel(decideRoute(text, ctx))
     if (mode === 'jev') {
       const cls = await this.understand(thread, text, ctx, JEV_BUDGET.send, !override)
+      if (override || mention) return withModel(override ? manual(override) : decideRoute(text, ctx), cls)
+      const local = decideRoute(text, ctx, cls)
+      const clear = clearTaskCategory(text)
+      if (clear && local.category === clear) return withModel(local, cls)
       const target: AgentId | undefined = cls?.delegate === 'other' ? (ctx.lastAgent ? (ctx.lastAgent === 'claude' ? 'codex' : 'claude') : undefined) : cls?.delegate
-      if (!override && cls && target && (cls.delegateConfidence ?? 0) >= 0.6 && ctx.available[target]) {
+      if (cls && target && (cls.delegateConfidence ?? 0) >= 0.6 && ctx.available[target] &&
+          (cls.delegate === 'other' ? /\b(?:(?:el|al|la) otr[oa]|the other)\b/i.test(text) : new RegExp(`\\b${target}\\b`, 'i').test(text))) {
         const agent = target
         return withModel({ agent, reason: `Se lo pides a ${AGENT_NAMES[agent]}`, method: 'jev', category: cls.category, delegated: true }, cls)
       }
-      if (!override) {
-        const deep = await this.analyze(thread, text, ctx, cls)
-        if (deep) return withModel(deep.decision, { tier: cls?.tier ?? deep.tier, tierConfidence: cls?.tierConfidence })
-      }
-      return withModel(override ? manual(override) : decideRoute(text, ctx, cls), cls)
+      const deep = await this.analyze(thread, text, ctx, cls)
+      if (deep) return withModel(deep.decision, {
+        tier: cls?.tier ?? deep.tier,
+        tierConfidence: cls?.tier ? cls.tierConfidence : undefined,
+        ultra: cls?.ultra
+      })
+      return withModel(local, cls)
     }
     if (override) return withModel(manual(override))
     const rules = decideRoute(text, ctx)
@@ -190,7 +210,7 @@ export class Dispatcher {
     const t = text.trim()
     if (!this.d.aiRoute || !t || /^@(claude|codex)\b/i.test(t)) return
     const unsure = !cls || cls.category === undefined || (cls.confidence ?? 0) < 0.6
-    if (!(requestsComputerControl(t) || unsure)) return
+    if (!AGENT_REFERENCE.test(t) && !(cls && unsure)) return
     try {
       const last = ctx.lastAgent && thread ? this.sessionOf(thread, ctx.lastAgent) : undefined
       const cwd = (thread && this.d.store.getProject(thread.projectId)?.path) ?? process.cwd()
@@ -202,6 +222,7 @@ export class Dispatcher {
       if (!ctx.available[agent]) return
       const tier = j.difficulty === 'hard' || j.difficulty === 'easy' ? (j.difficulty as ModelTier) : undefined
       const delegated = j.delegated === true
+      if (!delegated && AGENT_REFERENCE.test(t) && !unsure) return
       const reason = String(j.reason || `Analizado → ${AGENT_NAMES[agent]}`).slice(0, 160)
       return { tier, decision: { agent, reason: `${reason} · analizado con IA`, method: 'ai', category: cls?.category, delegated } }
     } catch {
@@ -335,7 +356,8 @@ export class Dispatcher {
     if (!opts.fromQueue) {
       const busy = (['claude', 'codex'] as AgentId[]).filter((a) => this.sessionOf(thread!, a)?.running)
       const mention = text.trim().match(/^@(claude|codex)\b/i)?.[1].toLowerCase() as AgentId | undefined
-      const want = opts.agent ?? mention
+      const delegated = explicitDelegation(text, this.lastAgent(thread))
+      const want = opts.agent ?? mention ?? (delegated && this.d.available(delegated) ? delegated : undefined)
       if (want ? busy.includes(want) : busy.length > 0) {
         const agent = want ?? busy[0]
         const queued = this.d.store.enqueue({ projectId: thread.projectId, threadId, prompt: text, context: opts.context, images: opts.images, agent: want })
@@ -360,7 +382,7 @@ export class Dispatcher {
         prompt: text,
         context: opts.context,
         images: opts.images,
-        agent: decision.method === 'rules' ? undefined : decision.agent
+        agent: decision.method === 'rules' && !decision.delegated ? undefined : decision.agent
       })
       this.pushQueue(thread.projectId)
       // Si acabó mientras se intentaba enviar, no dejamos el mensaje esperando para siempre.
@@ -370,7 +392,8 @@ export class Dispatcher {
     const session = this.ensureSession(thread, decision.agent, { model: opts.models?.[decision.agent], effort: opts.efforts?.[decision.agent] })
     thread = this.d.store.getThread(threadId) ?? thread
     const cross = this.crossContext(thread, decision.agent)
-    const context = [cross, this.parallelContext(thread, decision.agent), opts.context, NO_CLI_DELEGATION, decision.delegated ? DELEGATED_TO_YOU : undefined].filter(Boolean).join('\n\n') || undefined
+    const delegated = decision.delegated || explicitDelegation(text, this.lastAgent(thread)) === decision.agent
+    const context = [cross, this.parallelContext(thread, decision.agent), opts.context, NO_CLI_DELEGATION, delegated ? DELEGATED_TO_YOU : undefined].filter(Boolean).join('\n\n') || undefined
     const prompt = text.replace(/^@(claude|codex)\b\s*/i, '') || text
     this.d.service.send(session.id, prompt, context, { route: decision, images: opts.images, model: decision.model, effort: decision.effort })
     // El agente que ya estaba trabajando también recibe la tarea del que acaba de entrar.

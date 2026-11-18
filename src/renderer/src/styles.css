@@ -3870,6 +3870,15 @@ button.sb-item:hover {
   font-weight: 650;
   color: var(--accent-text);
 }
+.team-activity { min-width: 0; border-top: 1px solid var(--border); }
+.team-activity-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding-top: 10px; font-size: 12px; }
+.team-step { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.team-step-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 12px; }
+.team-step-phase { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.team-step-tool { display: flex; flex-direction: column; gap: 2px; }
+.team-step-tool .mono, .team-step-message { overflow-wrap: anywhere; white-space: pre-wrap; max-height: 70px; overflow: auto; }
+.team-step-quiet { color: var(--yellow); }
+.team-step-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .stepper {
   display: flex;
   align-items: center;
@@ -5233,9 +5242,7 @@ button.sb-item:hover {
 .usage-resets .btn { margin-top: 8px; }
 .usage-popup .modal-actions > span { flex: 1; line-height: 1.5; }
 
-/* Preparados y Pendientes: siempre se ven al menos 3 filas (minHeight en línea, según cuántas haya); el resto baja con scroll */
-.git-body > .section.fill.sec-staged:not(.folded),
-.git-body > .section.fill.sec-changes:not(.folded) { min-height: auto; }
+/* Preparados y Pendientes: minHeight en línea (cabecera + hasta 3 filas). No usar min-height:auto: impide encoger y el scroll se va al panel entero */
 
 .chat-image { display: inline-flex; vertical-align: top; align-items: center; justify-content: center; max-width: 100%; margin: 8px 0; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: transparent; cursor: zoom-in; overflow: hidden; }
 .chat-image img { display: block; max-width: 100%; width: auto; height: auto; max-height: 420px; object-fit: contain; }

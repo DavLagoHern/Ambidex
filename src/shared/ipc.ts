@@ -153,6 +153,7 @@ export interface IpcContract {
 
   'orch:list': (projectId: string) => Orchestration[]
   'orch:get': (id: string) => Orchestration | undefined
+  'orch:runs': (id: string) => RunInfo[]
   'orch:start': (projectId: string, req: OrchStart, threadId?: string) => Orchestration
   'orch:approvePlan': (id: string, tasks?: PlanTask[]) => void
   'orch:cancel': (id: string) => void

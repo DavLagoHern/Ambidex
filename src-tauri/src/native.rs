@@ -110,7 +110,9 @@ pub async fn dispatch(
             "test:capture" => {
                 let view = app.get_webview(owner).ok_or("Ventana cerrada")?;
                 let bytes = crate::browser::snapshot(&view).await?;
-                let suffix = if arg(args, 0).as_str() == Some("approval") {
+                let suffix = if arg(args, 0).as_str() == Some("team") {
+                    ".team.png"
+                } else if arg(args, 0).as_str() == Some("approval") {
                     ".approval.png"
                 } else if arg(args, 0).as_str() == Some("wide") {
                     ".wide.png"

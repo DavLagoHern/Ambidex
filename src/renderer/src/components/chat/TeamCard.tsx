@@ -9,6 +9,7 @@ import { durationText } from '../../lib/utils'
 import { AgentLogo, Icon } from '../Icons'
 import { Markdown } from '../Markdown'
 import { CopyButton, Elapsed } from './parts'
+import { TeamActivity } from './TeamActivity'
 
 export const ORCH_STATUS: Record<OrchStatus, { label: string; cls: string }> = {
   planning: { label: 'Planificando', cls: 'running' },
@@ -328,6 +329,7 @@ export function TeamCard({ o }: { o: Orchestration }) {
         )}
       </div>
       <Stepper o={o} />
+      <TeamActivity o={o} />
       {o.error && ['needs_user', 'failed'].includes(o.status) && (
         <div className="msg-error">
           <Icon.alert size={14} />

@@ -73,7 +73,14 @@ if (process.env.FAKE_WRITE) for (const [f, c] of Object.entries(JSON.parse(proce
 if (mode === 'replay') {
   for (const line of readFileSync(process.env.FAKE_FIXTURE, 'utf8').split('\n')) {
     if (!line.trim()) continue
-    emit(JSON.parse(line))
+    const event = JSON.parse(line)
+    if (event.type === 'result' && process.env.FAKE_CLAUDE_FOREGROUND_TASKS === '1') {
+      for (const id of ['native-typecheck', 'native-build']) {
+        emit({ type: 'system', subtype: 'task_started', task_id: id, task_type: 'local_bash', is_backgrounded: false })
+        emit({ type: 'system', subtype: 'task_notification', task_id: id, status: 'completed' })
+      }
+    }
+    emit(event)
     await sleep(2)
   }
   process.exit(0)
@@ -113,6 +120,19 @@ if (mode === 'orch') {
     }
   }
   const state = process.env.FAKE_STATE
+  if (stdin.includes('PROPONENTE')) {
+    const delay = Number(process.env[codex ? 'FAKE_PROPOSAL_DELAY_CODEX_MS' : 'FAKE_PROPOSAL_DELAY_CLAUDE_MS'] || 0)
+    if (delay) {
+      if (codex) out({ type: 'item.started', item: { id: 'proposal-read', type: 'command_execution', command: 'rg --files' } })
+      else {
+        out({ type: 'system', subtype: 'init', session_id: 'fake-proposal', model: 'fake-planning-model' })
+        out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'proposal-read', name: 'Read', input: { file_path: 'README.md' } }] } })
+      }
+      await sleep(delay)
+      if (codex) out({ type: 'item.completed', item: { id: 'proposal-read', type: 'command_execution', command: 'rg --files', exit_code: 0 } })
+      else out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'proposal-read', content: 'Proyecto de prueba' }] } })
+    }
+  }
   if (stdin.includes('PROPONENTE') && process.env.FAKE_FAIL_PROPOSAL === (codex ? 'codex' : 'claude')) {
     // propuesta que no es un plan: ese agente "no pudo proponer"
     reply('no sé por dónde empezar')

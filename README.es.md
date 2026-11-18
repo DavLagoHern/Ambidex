@@ -112,6 +112,10 @@ Cada 6 horas (y con **Ajustes → Agentes → Buscar ahora**) la app compara la 
 
 ### Equipo (orquestador multiagente)
 
+La tarjeta muestra la actividad de cada paso: agente, modelo, razonamiento, tiempo, última herramienta y botones **Ver conversación** y **Ver salida**. Cada propuesta se publica cuando termina, aunque el otro agente siga trabajando. Si pasan 90 segundos sin salida nueva, se indica el silencio sin dar por hecho que el proceso está bloqueado. Los pasos y sus estados se recuperan al volver a abrir el chat.
+
+La planificación inicial hace una exploración dirigida, sin auditorías completas, pruebas ni subagentes. Conserva tus modelos y usa razonamiento medio si no has elegido otro nivel. El análisis detallado se deja para las tareas del plan; no hay un tiempo de respuesta garantizado.
+
 1. **Plan:** un agente inspecciona el proyecto y devuelve un plan estructurado (JSON validado con esquema), con tareas, dependencias, asignaciones, criterios de aceptación y comando de pruebas. Puedes cambiar el reparto o quitar tareas antes de aprobarlo.
 2. **Desarrollo:** cada agente trabaja en **su propio git worktree y rama**. Las tareas independientes van en paralelo.
 3. **Intercambio:** antes de una tarea que depende del trabajo del otro agente, el motor incorpora su rama. Si hay conflictos, los resuelve el propio agente.

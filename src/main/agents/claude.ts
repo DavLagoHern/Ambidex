@@ -77,6 +77,7 @@ export const claudeAdapter: Adapter = {
     if (req.effort) args.push('--effort', req.effort)
     if (req.schema) args.push('--json-schema', req.schema.json)
     if (req.allowedTools?.length) args.push('--allowedTools', req.allowedTools.join(','))
+    if (req.disallowedTools?.length) args.push('--disallowedTools', req.disallowedTools.join(','))
     if (req.extra?.length) args.push(...req.extra)
     return args
   },

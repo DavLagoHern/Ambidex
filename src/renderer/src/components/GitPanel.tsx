@@ -327,6 +327,9 @@ function PRDialog({ cwd, branch, onClose }: { cwd: string; branch: string; onClo
   )
 }
 
+// cabecera (30px + 1px de borde) y hasta 3 filas de 26px: la sección encoge hasta ahí y el resto se desplaza dentro
+const sectionMin = (rows: number): number => 31 + Math.min(rows, 3) * 26
+
 export function GitPanel() {
   const ps = usePS()
   const repos = useStore((s) => s.repos)
@@ -642,7 +645,7 @@ export function GitPanel() {
 
             {spacerAt === 'top' && <div className="git-spacer" />}
             {staged.length > 0 && (
-              <div className={`section fill sec-staged ${collapsed.staged ? 'folded' : ''}`}>
+              <div className={`section fill sec-staged ${collapsed.staged ? 'folded' : ''}`} style={collapsed.staged ? undefined : { minHeight: sectionMin(staged.length) }}>
                 <div className="section-header" onClick={() => toggle('staged')}>
                   {collapsed.staged ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.check size={12} className="section-icon" /> Preparados
                   <span className="count">{staged.length}</span>
@@ -667,7 +670,7 @@ export function GitPanel() {
               </div>
             )}
             {spacerAt === 'staged' && <div className="git-spacer" />}
-            <div className={`section fill sec-changes ${collapsed.changes || !unstaged.length ? 'folded' : ''}`}>
+            <div className={`section fill sec-changes ${collapsed.changes || !unstaged.length ? 'folded' : ''}`} style={collapsed.changes || !unstaged.length ? undefined : { minHeight: sectionMin(unstaged.length) }}>
               <div className="section-header" onClick={() => toggle('changes')}>
                 {collapsed.changes || !unstaged.length ? <Icon.chevronRight size={12} /> : <Icon.chevronDown size={12} />} <Icon.fileEdit size={12} className="section-icon" /> Pendientes
                 <span className="count">{unstaged.length}</span>

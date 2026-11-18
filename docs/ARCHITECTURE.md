@@ -40,6 +40,10 @@ Hallazgos que condicionan el diseño:
   `can_use_tool` por stdin. `claude-live.ts` conserva la entrada hasta el resultado final, sin permisos
   pendientes ni tareas de fondo. Los resultados intermedios se retienen para no cerrar subagentes ni contar
   dos veces el uso. Equipo y trabajos estructurados conservan `none` y sus herramientas permitidas.
+  `task_notification` retira tareas completadas, fallidas o detenidas; los comandos `local_bash` de primer
+  plano no se confunden con tareas de fondo. El último `result` se publica al vaciar stdout, también si
+  llega después de EOF. Si el CLI no sale tras el resultado confirmado y EOF, se termina su grupo con
+  una espera limitada. Esta limpieza no se activa mientras haya tareas o permisos pendientes.
 - Codex usa `on-request` y `approvalsReviewer:user` solo cuando hay un host interactivo del chat. El broker
   mantiene los permisos de conversación en memoria; las respuestas nativas conceden la solicitud actual.
   No se escriben políticas permanentes. Las tarjetas se persisten como mensajes y caducan al recuperar un cierre.
@@ -209,11 +213,16 @@ OpenVINO INT8 en CPU. Se instala solo si el usuario lo pide desde Ajustes: desca
 aleatoria (`JEV_API_KEY`). Cada mensaje es **una** petición a `/v1/systemone` con el mensaje, el agente
 anterior y la petición anterior como estado, y dos preguntas: `choice` entre los 8 tipos de tarea y `noul`
 "¿continúa la petición anterior?". El tipo (si la confianza ≥ 0,2) pasa por las preferencias del usuario y
-las mismas restricciones que las reglas. Si Jev no contesta en 1,2 s (vista previa) o 3 s (envío), deciden
-las reglas. Con **modelo según la dificultad** activo (Ajustes → Modelos, `settings.modelPolicy`), la misma
-petición lleva una tercera pregunta, `choice` entre `hard` y `easy`; también se pregunta si el agente lo eligió
-el usuario o con `@mención`. `pickModel` (en `router.ts`) elige entre los modelos permitidos de ese agente el de
-esa dificultad, sin elegir nunca uno que el CLI instalado no ofrezca; el de `hard` solo con dificultad `hard` y seguridad ≥ 0,3 (`HARD_MODEL_CONFIDENCE`); sin estimación o con duda, el de `easy`. El modelo va
+las mismas restricciones que las reglas. La espera por Jev se limita a 1,2 s en vista previa y 3 s al enviar.
+Si falta una categoría, las reglas pueden cubrirla. Al enviar, Haiku puede aclarar una referencia a un agente
+o una clasificación local dudosa, con un máximo de 8 s adicionales. Una elección manual o con `@mención`
+tiene prioridad para elegir agente. Solo se pregunta por delegación si el mensaje hace referencia a un agente.
+Las órdenes directas («dile a Codex que…»), las confirmaciones cortas («vale, hazlo») y algunas
+instrucciones inequívocas, como hacer un commit o diseñar una migración, tienen reglas propias.
+Las categorías personalizadas reconocidas por Jev se respetan.
+Con **modelo según la dificultad** activo (Ajustes → Modelos, `settings.modelPolicy`), la petición incluye
+una elección entre `hard` y `easy` y una pregunta por complejidad excepcional. `pickModel` (en `router.ts`) elige entre los modelos permitidos de ese agente el de
+esa dificultad entre los que ofrece el CLI; el de `hard` solo con dificultad `hard` y seguridad ≥ 0,3 (`HARD_MODEL_CONFIDENCE`); sin estimación o con duda, el de `easy`. El modelo va
 solo en ese turno (`SendOptions.model`): las sesiones del hilo no fijan modelo salvo que el usuario elija uno en el
 selector (o antes del primer mensaje, en `threads:send` `models`). El razonamiento sigue la misma idea (`pickEffort`, `modelPolicy.autoEffort`): medio por defecto, alto solo si la seguridad de «difícil» es ≥ 0,75 y bajo si la de «sencilla» es ≥ 0,6, nunca por encima de alto salvo que lo fije el usuario (`SendOptions.effort`, `threads:send` `efforts`). Las respuestas se cachean (la vista previa y el envío hacen la misma pregunta). El servidor se
 detiene tras 10 minutos sin uso (≈1 GB de memoria) y al salir de la app; si quedó huérfano tras un cierre
@@ -258,10 +267,13 @@ en el navegador.
 (más `needs_user`, `failed`, `cancelled`, `interrupted`). Cada paso es una ejecución real de un CLI en una
 sesión visible; planes y revisiones usan salida estructurada (`--json-schema` / `--output-schema`) y se
 validan (`normalizePlan`: dependencias inexistentes, ciclos, reparto por modo). Cada agente tiene su worktree
-(`codeai/<slug>/<agente>`); antes de una tarea dependiente se hace merge de la rama del otro agente. Revisión
+(`codeai/<slug>/<agente>`); una tarea dependiente incorpora el commit entregado por el otro agente. Revisión
 cruzada con rondas limitadas, integración en un worktree propio, pruebas con lista blanca de comandos y,
 al final, integración en la rama del usuario solo con su aprobación (squash o merge) y nunca sobre cambios
 sin commit. Al reiniciar la app lo que estaba en marcha pasa a `interrupted` y se puede reanudar.
+Cada turno de Equipo puede durar hasta 3 minutos en lectura o 15 en escritura; al agotarse el plazo
+se detiene y se indica el paso afectado. Una propuesta válida permite continuar si el otro proponente
+falla y su proceso se ha cerrado. Las pruebas tienen un límite de 10 minutos por ejecución.
 
 ## 8. Seguridad
 

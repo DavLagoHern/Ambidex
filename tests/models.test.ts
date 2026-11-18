@@ -83,6 +83,13 @@ describe('chat único: agente y modelo de cada mensaje', () => {
     expect(s.asked.at(-1)?.text).toBe('refactoriza todo el módulo')
   })
 
+  it('la orden con @ tiene prioridad sobre lo que infiera Jev', async () => {
+    const s = setup(() => ({ category: 'review', tier: 'easy', delegate: 'codex', delegateConfidence: 0.99 }))
+    const t = s.dispatcher.createThread(s.project.id)
+    const r = await s.dispatcher.sendThread(t.id, '@claude compara lo que hizo Codex')
+    expect(r.decision).toMatchObject({ agent: 'claude', method: 'mention' })
+  })
+
   it('uses powerful models above 80% weekly remaining without raising effort', async () => {
     const s = setup(() => ({ category: 'implement', tier: 'easy', tierConfidence: 1 }))
     for (const agent of ['claude', 'codex'] as const) {

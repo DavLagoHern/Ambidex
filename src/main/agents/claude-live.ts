@@ -1,25 +1,35 @@
-import { ManagedProcess, type AgentProcess, type ExitInfo, type ProcessHandlers, type ProcessSpec } from './runner'
+import { killGroup, ManagedProcess, type AgentProcess, type ExitInfo, type ProcessHandlers, type ProcessSpec } from './runner'
 import { parseJson, short, type RunRequest } from './types'
 
 export class ClaudeLiveProcess implements AgentProcess {
   private proc: ManagedProcess
   private waiting = new Map<string, AbortController>()
   private background = new Set<string>()
+  private finishedTasks = new Set<string>()
   private result?: string
-  private delivered = false
   private cancelled = false
   private closing = false
+  private forcedExit = false
+  private exitTimer?: ReturnType<typeof setTimeout>
+  private killTimer?: ReturnType<typeof setTimeout>
   readonly done: Promise<ExitInfo>
 
-  constructor(spec: ProcessSpec, private req: RunRequest, private handlers: ProcessHandlers) {
+  constructor(spec: ProcessSpec, private req: RunRequest, private handlers: ProcessHandlers, private lifecycle: { exitGraceMs?: number; killGraceMs?: number } = {}) {
     this.proc = new ManagedProcess({ ...spec, keepOpen: true }, {
       onStdout: line => this.onLine(line), onStderr: handlers.onStderr
     })
     this.done = this.proc.done.then(exit => {
+      this.clearExitTimers()
+      const unfinished = this.waiting.size > 0 || this.background.size > 0
       this.closing = true
       this.expire(this.cancelled ? 'cancelled' : 'process-exited')
       if (this.cancelled) return { ...exit, cancelled: true }
-      if (exit.code === 0 && !this.delivered) {
+      if (this.result && !unfinished) {
+        // EOF puede ir seguido de un último result (p. ej. uso acumulado de
+        // subagentes). Publicar una sola vez, después de vaciar stdout.
+        this.handlers.onStdout(this.result)
+        if (this.forcedExit) return { ...exit, code: parseJson(this.result)?.is_error ? 1 : 0, signal: null }
+      } else if (exit.code === 0) {
         this.handlers.onStdout(JSON.stringify({ type: 'result', is_error: true, result: 'Claude se cerró antes de completar el trabajo pendiente.' }))
         return { ...exit, code: 1 }
       }
@@ -37,6 +47,7 @@ export class ClaudeLiveProcess implements AgentProcess {
   }
   endInput() { if (!this.background.size && !this.waiting.size) this.proc.endInput() }
   cancel(graceMs?: number) {
+    this.clearExitTimers()
     this.cancelled = true; this.closing = true; this.expire('cancelled')
     return this.proc.cancel(graceMs)
   }
@@ -51,11 +62,51 @@ export class ClaudeLiveProcess implements AgentProcess {
     // o un aviso de tareas en segundo plano puede acompañar al result.
     queueMicrotask(() => {
       if (this.closing || !this.result || this.waiting.size || this.background.size) return
-      const line = this.result
-      this.result = undefined; this.delivered = true; this.closing = true
-      this.handlers.onStdout(line)
+      this.closing = true
       this.proc.endInput()
+      // Un CLI o plugin que no salga tras EOF no puede dejar la app ocupada
+      // indefinidamente después de haber entregado el resultado final.
+      this.exitTimer = setTimeout(() => {
+        this.forcedExit = true
+        killGroup(this.pid, 'SIGTERM')
+        this.killTimer = setTimeout(() => killGroup(this.pid, 'SIGKILL'), this.lifecycle.killGraceMs ?? 1000)
+      }, this.lifecycle.exitGraceMs ?? 3000)
     })
+  }
+
+  private clearExitTimers() {
+    clearTimeout(this.exitTimer); clearTimeout(this.killTimer)
+  }
+
+  private taskId(task: any): string | undefined {
+    if (typeof task === 'string') return task
+    const id = task?.task_id ?? task?.taskId ?? task?.id
+    return typeof id === 'string' ? id : undefined
+  }
+
+  private taskFinished(status: unknown) {
+    return typeof status === 'string' && ['completed', 'done', 'failed', 'error', 'stopped', 'cancelled', 'canceled', 'killed'].includes(status)
+  }
+
+  private trackTasks(d: any) {
+    if (d.type !== 'system') return
+    const id = this.taskId(d)
+    if (d.subtype === 'task_notification' && id && this.taskFinished(d.status)) {
+      this.finishedTasks.add(id); this.background.delete(id)
+    } else if (d.subtype === 'task_started' && id && d.is_backgrounded !== false && !this.finishedTasks.has(id)) {
+      this.background.add(id)
+    } else if (d.subtype === 'background_tasks_changed') {
+      const tasks = Array.isArray(d.tasks) ? d.tasks : Array.isArray(d.background_tasks) ? d.background_tasks : null
+      if (!tasks) return
+      const active = new Set<string>()
+      for (const task of tasks) {
+        const key = this.taskId(task)
+        if (!key) continue
+        if (this.taskFinished(task?.status)) this.finishedTasks.add(key)
+        else if (!this.finishedTasks.has(key)) active.add(key)
+      }
+      this.background = active
+    }
   }
 
   private permission(id: string, request: any) {
@@ -107,10 +158,7 @@ export class ClaudeLiveProcess implements AgentProcess {
       this.waiting.get(d.request_id)?.abort('server-resolved'); this.waiting.delete(d.request_id)
       this.maybeFinish(); return
     }
-    if (d.type === 'system' && d.subtype === 'background_tasks_changed') {
-      const tasks = Array.isArray(d.tasks) ? d.tasks : Array.isArray(d.background_tasks) ? d.background_tasks : null
-      if (tasks) this.background = new Set(tasks.map((t: any, i: number) => String(t?.id ?? t?.task_id ?? i)))
-    } else if (d.type === 'system' && d.subtype === 'task_started') this.background.add(String(d.task_id ?? d.taskId ?? d.uuid ?? 'background'))
+    this.trackTasks(d)
     if (d.type === 'result') { this.result = line; this.maybeFinish(); return }
     this.handlers.onStdout(line)
     this.maybeFinish()

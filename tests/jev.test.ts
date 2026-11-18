@@ -122,7 +122,10 @@ describe('Jev (modelo local del enrutado)', () => {
     expect(existsSync(join(dir, 'jevos-v5', 'model', 'model.json'))).toBe(true)
     expect(JSON.parse(readFileSync(join(dir, 'jevos-v5', 'installed.json'), 'utf8')).sha256[JEV_ASSETS.model]).toBe(sha(join(releaseDir, JEV_ASSETS.model)))
 
-    const c = await jev.classify('El botón de pagar da un error en el móvil', { previousAgent: 'Claude Code', previousRequest: 'Haz la pantalla de pago' })
+    const context = { previousAgent: 'Claude Code', previousRequest: 'Haz la pantalla de pago' }
+    const prompt = 'El botón de pagar da un error en el móvil'
+    const [c, simultaneous] = await Promise.all([jev.classify(prompt, context), jev.classify(prompt, context)])
+    expect(simultaneous.category).toBe(c.category)
     expect(jev.status().state).toBe('ready')
     expect(c).toMatchObject({ via: 'jev', category: 'debug', followUp: false })
     expect(c.confidence).toBeCloseTo(0.68)
@@ -144,7 +147,7 @@ describe('Jev (modelo local del enrutado)', () => {
     const hard = await jev.classify('Refactoriza la arquitectura de pagos', { difficulty: true })
     expect(hard).toMatchObject({ tier: 'hard' })
     const req2 = JSON.parse(readFileSync(join(dir, 'jevos-v5', 'requests.log'), 'utf8').trim().split('\n')[1])
-    expect(Object.keys(req2.questions)).toEqual(['category', 'delegate', 'ultra', 'difficulty'])
+    expect(Object.keys(req2.questions)).toEqual(['category', 'ultra', 'difficulty'])
     expect(Object.keys(req2.questions.difficulty.criteria)).toEqual(['hard', 'easy'])
     expect(await jev.test('cambia el color del botón')).toMatchObject({ tier: 'easy' })
 

@@ -22,6 +22,7 @@ export interface RunRequest {
   extra?: string[]
   // herramientas permitidas sin preguntar (Claude: --allowedTools)
   allowedTools?: string[]
+  disallowedTools?: string[]
   // imágenes adjuntas (rutas ya comprobadas, dentro de la carpeta de adjuntos de la app)
   images?: string[]
   // continuar la sesión en una copia nueva (la original sigue abierta en otro sitio)

@@ -1,6 +1,8 @@
 import { existsSync, lstatSync, readFileSync, symlinkSync } from 'fs'
 import { join } from 'path'
-import { git } from '../git'
+import { git as execGit } from '../git'
+
+const git = (cwd: string, args: string[]) => execGit(cwd, args, undefined, 60_000)
 
 const quiet = <T>(p: Promise<T>, def: T) => p.catch(() => def)
 

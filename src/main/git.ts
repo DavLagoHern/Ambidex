@@ -13,7 +13,7 @@ const QUIET = new Set(['status', 'diff', 'show', 'log', 'rev-parse', 'for-each-r
 
 export const gitOutput = () => output.slice(-400)
 
-export function git(cwd: string, args: string[], input?: string): Promise<string> {
+export function git(cwd: string, args: string[], input?: string, timeout?: number): Promise<string> {
   const started = Date.now()
   const record = (ok: boolean, stderr: string) => {
     // las lecturas frecuentes solo se registran si fallan, para no inundar el log
@@ -27,6 +27,8 @@ export function git(cwd: string, args: string[], input?: string): Promise<string
       args,
       {
         cwd,
+        timeout,
+        killSignal: timeout ? 'SIGKILL' : undefined,
         maxBuffer: 128 * 1024 * 1024,
         // nunca se abre un editor (merge, rebase, cherry-pick…): se quedaría esperando
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no' }

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { JevStatus, JevTest, ModelTier, RouteCategory } from '@shared/types'
-import { CATEGORY_CRITERIA, DIFFICULTY_CRITERIA } from '@shared/router'
+import { AGENT_REFERENCE, CATEGORY_CRITERIA, DIFFICULTY_CRITERIA } from '@shared/router'
 import type { Classification } from '@shared/router'
 import { killGroup, pidMatches } from './agents/runner'
 
@@ -114,6 +114,7 @@ export class Jev {
   private abort?: AbortController
   private st: JevStatus
   private cache = new Map<string, Classification & { probabilities: Partial<Record<RouteCategory, number>>; followP?: number; tierConfidence?: number; delegate?: 'codex' | 'claude' | 'other'; ultra?: number; delegateConfidence?: number }>()
+  private inFlight = new Map<string, Promise<Answers>>()
   private fetch: typeof fetch
 
   constructor(private d: JevDeps) {
@@ -287,6 +288,13 @@ export class Jev {
     const keep = (b: Buffer) => (tail = (tail + b.toString()).slice(-2000))
     p.stdout?.on('data', keep)
     p.stderr?.on('data', keep)
+    p.once('error', (error) => {
+      if (this.proc !== p) return
+      this.proc = undefined
+      clearTimeout(this.idle)
+      this.d.log('jev.spawn.error', { error: error.message })
+      this.set({ state: 'stopped', error: `No se pudo arrancar Jev: ${error.message}` })
+    })
     p.on('exit', (code, signal) => {
       if (this.proc !== p) return
       this.proc = undefined
@@ -307,7 +315,7 @@ export class Jev {
       try {
         const r = await this.fetch(`http://127.0.0.1:${this.port}/health`, { signal: AbortSignal.timeout(1500) })
         const j = r.ok ? ((await r.json()) as { status?: string }) : null
-        if (j?.status === 'ready') {
+        if (j?.status === 'ready' && this.proc === p && this.st.state === 'starting') {
           this.d.log('jev.ready', { ms: Date.now() - t0, threads })
           this.set({ state: 'ready' })
           return this.touch()
@@ -364,20 +372,26 @@ export class Jev {
     }
     const categories = ctx.categories && Object.keys(ctx.categories).length ? ctx.categories : JEV_CATEGORIES
     const levels = ctx.difficultyCriteria ?? JEV_DIFFICULTY
+    const checkDelegate = AGENT_REFERENCE.test(state.message as string)
     const key = JSON.stringify([state, !!ctx.difficulty, categories, ctx.difficulty ? levels : null])
     const hit = this.cache.get(key)
     if (hit) return { ...hit, ms: 0 }
     const questions: Record<string, unknown> = { category: { type: 'choice', instructions: CATEGORY_Q, criteria: categories } }
     if (ctx.previousAgent) questions.followup = { type: 'noul', instructions: FOLLOWUP_Q }
-    questions.delegate = { type: 'choice', instructions: DELEGATE_Q, criteria: DELEGATE_CRITERIA }
+    if (checkDelegate) questions.delegate = { type: 'choice', instructions: DELEGATE_Q, criteria: DELEGATE_CRITERIA }
     if (ctx.difficulty) questions.ultra = { type: 'noul', instructions: ULTRA_Q }
     if (ctx.difficulty) questions.difficulty = { type: 'choice', instructions: DIFFICULTY_Q, criteria: levels }
     const t0 = Date.now()
-    const a = await this.ask(state, questions, timeoutMs)
+    let pending = this.inFlight.get(key)
+    if (!pending) {
+      pending = this.ask(state, questions, timeoutMs).finally(() => this.inFlight.delete(key))
+      this.inFlight.set(key, pending)
+    }
+    const a = await pending
     const ms = Date.now() - t0
     const cat = a.category
     const confidence = cat?.confidence
-    const category = cat?.choice && cat.choice in categories && (confidence ?? 0) >= MIN_CONFIDENCE ? (cat.choice as RouteCategory) : undefined
+    const category = cat?.choice && Object.hasOwn(categories, cat.choice) && (confidence ?? 0) >= MIN_CONFIDENCE ? (cat.choice as RouteCategory) : undefined
     const followP = a.followup?.noul
     const dif = a.difficulty
     const out = {
@@ -386,7 +400,7 @@ export class Jev {
       confidence,
       followUp: (followP ?? 0) >= 0.5,
       followP,
-      tier: dif?.choice && dif.choice in levels && (dif.confidence ?? 0) >= MIN_CONFIDENCE ? (dif.choice as ModelTier) : undefined,
+      tier: dif?.choice && Object.hasOwn(levels, dif.choice) && (dif.confidence ?? 0) >= MIN_CONFIDENCE ? (dif.choice as ModelTier) : undefined,
       tierConfidence: dif?.confidence,
       ultra: a.ultra?.noul,
       delegate: a.delegate?.choice === 'codex' || a.delegate?.choice === 'claude' || a.delegate?.choice === 'other' ? (a.delegate.choice as 'codex' | 'claude' | 'other') : undefined,

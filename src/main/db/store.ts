@@ -662,6 +662,10 @@ export class Store {
     ).map((r) => this.toRun(r))
   }
 
+  orchestrationRuns(id: string): RunInfo[] {
+    return (this.db.prepare('SELECT r.*, s.title FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.orchestration_id = ? ORDER BY r.started_at DESC').all(id) as Row[]).map(r => this.toRun(r))
+  }
+
   runningRuns(): (RunInfo & { bin: string | null })[] {
     return (this.db.prepare("SELECT * FROM runs WHERE status = 'running'").all() as Row[]).map((r) => ({ ...this.toRun(r), bin: r.bin }))
   }

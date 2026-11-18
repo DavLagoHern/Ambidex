@@ -30,6 +30,7 @@ const engineCopy=join(dir,'engine.mjs');copyFileSync(join(cwd,'out/engine/index.
 const shell=join(dir,'shell');writeFileSync(shell,'#!/bin/sh\nexec /bin/zsh -f -i\n',{mode:0o755})
 const fake = {}
 const approvalPaths = {}
+const teamPaths = {}
 for (const agent of ['claude','codex']) {
   const path = join(dir,agent)
   const version = agent==='claude'?'Claude 2.1.316':'codex-cli 0.155.1'
@@ -42,8 +43,11 @@ for (const agent of ['claude','codex']) {
   const request=JSON.stringify([{id:0,method:'item/commandExecution/requestApproval',params:{command:'printf AMBIDEX_PERMISSION',cwd:root}}])
   writeFileSync(approvalPath,`#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "auth" ] || [ "$1" = "login" ] || [ "$1" = "debug" ]; then exec ${quote(path)} "$@"; fi\nexport FAKE_CLAUDE_BACKGROUND=1\nexport FAKE_APPROVAL_REQUESTS=${quote(request)}\nexec ${quote(process.execPath)} ${quote(approvalFixture)} "$@"\n`,{mode:0o755})
   approvalPaths[agent+'Path']=approvalPath
+  const teamPath=join(dir,agent+'-team')
+  writeFileSync(teamPath,`#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "auth" ] || [ "$1" = "login" ] || [ "$1" = "debug" ]; then exec ${quote(path)} "$@"; fi\nexport FAKE_MODE=orch\nexport FAKE_PROPOSAL_DELAY_CLAUDE_MS=2400\nexec ${quote(process.execPath)} ${quote(fakeCli)} "$@"\n`,{mode:0o755})
+  teamPaths[agent+'Path']=teamPath
 }
-const env = {...process.env,AMBIDEX_USER_DATA:data,AMBIDEX_TEST:'1',FAKE_HOLD_MS:'400',FAKE_MODE:'replay'}
+const env = {...process.env,AMBIDEX_USER_DATA:data,AMBIDEX_TEST:'1',FAKE_HOLD_MS:'400',FAKE_MODE:'replay',FAKE_CLAUDE_FOREGROUND_TASKS:'1'}
 // Seed with the same engine used by the desktop host, then close it before opening the app.
 const engine=spawn(process.execPath,[join(cwd,'out/engine/index.mjs')],{cwd,env,stdio:['pipe','pipe','inherit']})
 const pending=new Map();let n=0
@@ -66,7 +70,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r))
 const report=join(dir,'report.json')
 const context={root,reviewPath,url:`http://127.0.0.1:${server.address().port}`,png:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII='}
 const binary=process.env.E2E_APP||join(cwd,'src-tauri/target/debug/ambidex')
-context.approvalPaths=approvalPaths;context.normalPaths=fake
+context.approvalPaths=approvalPaths;context.normalPaths=fake;context.teamPaths=teamPaths
 assert(existsSync(binary),'Build first: npm run build:assets && cargo build --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml')
 // Launch a proper .app through Launch Services. Unbundled macOS WebKit views can suspend timers
 // when another test panel takes focus, which makes a long UI test wait indefinitely.
@@ -76,7 +80,7 @@ copyFileSync(binary,join(bundle,'Contents/MacOS/ambidex'))
 writeFileSync(join(bundle,'Contents/Info.plist'),`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.ambidex.native-test</string><key>CFBundleExecutable</key><string>ambidex</string><key>CFBundleName</key><string>Ambidex Native Test</string><key>CFBundlePackageType</key><string>APPL</string><key>NSHighResolutionCapable</key><true/><key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/><key>NSAllowsLocalNetworking</key><true/></dict></dict></plist>`)
 execFileSync('codesign',['--force','--sign','-',bundle],{stdio:'ignore'})
 const log=join(dir,'native.log')
-const launchEnv={AMBIDEX_USER_DATA:data,AMBIDEX_TEST:'1',FAKE_HOLD_MS:'400',FAKE_MODE:'replay',AMBIDEX_NODE_BIN:process.execPath,AMBIDEX_ENGINE_PATH:engineCopy,SHELL:shell,AMBIDEX_E2E_REPORT:report,AMBIDEX_E2E_CONTEXT:JSON.stringify(context)}
+const launchEnv={AMBIDEX_USER_DATA:data,AMBIDEX_TEST:'1',FAKE_HOLD_MS:'400',FAKE_MODE:'replay',FAKE_CLAUDE_FOREGROUND_TASKS:'1',AMBIDEX_NODE_BIN:process.execPath,AMBIDEX_ENGINE_PATH:engineCopy,SHELL:shell,AMBIDEX_E2E_REPORT:report,AMBIDEX_E2E_CONTEXT:JSON.stringify(context)}
 const openArgs=['-n','-W','--stdout',log,'--stderr',log]
 for(const[key,value]of Object.entries(launchEnv))if(value!==undefined)openArgs.push('--env',key+'='+value)
 openArgs.push(bundle)
@@ -98,7 +102,7 @@ try {
   assert(existsSync(report),'Native test produced no report. '+(existsSync(report+'.progress')?readFileSync(report+'.progress','utf8'):'No progress')+logs+'\n'+(existsSync(join(data,'logs/engine.log'))?readFileSync(join(data,'logs/engine.log'),'utf8'):''))
   result=JSON.parse(readFileSync(report,'utf8'))
   for(const test of result.results)console.log(`${test.ok?'✓':'✗'} ${test.name}${test.ok?` (${test.ms} ms)`:'\n'+test.error}`)
-  assert(result.results.length===19,'Not all native checks ran')
+  assert(result.results.length===20,'Not all native checks ran')
   assert(result.results.every(t=>t.ok),'Some native tests failed. '+logs)
   console.log('All native WebKit integration checks passed.')
 } finally {

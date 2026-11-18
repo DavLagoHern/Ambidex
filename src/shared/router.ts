@@ -60,6 +60,27 @@ const KEYWORDS: Record<BuiltinCategory, RegExp> = {
 }
 
 const FOLLOW_UP = /^(y\s|también|tambien|ahora\s|vale|ok\b|okay|perfecto|genial|sigue|continúa|continua|hazlo|haz\s+eso|eso\b|lo\s+mismo|otra\s+vez|mejor\b|pero\s|and\s|also\s|now\s|continue|go\s+on|do\s+it|same|again)/i
+export const CONTINUATION_CONFIRMATION = /^(?:(?:s[ií]|vale|ok|perfecto|yes)[ ,]+)?(?:hazlo|adelante|sigue|do it|go ahead)[.! ]*$/i
+export const AGENT_REFERENCE = /\b(?:claude|codex|(?:el|al|la|a la) otr[oa]|the other)\b/i
+
+export function explicitDelegation(text: string, lastAgent?: AgentId): AgentId | undefined {
+  const match = text.trim().match(/^(?:(?:por favor,?\s+)?(?:dile|p[ií]dele|p[aá]saselo|p[aá]sale|encomi[eé]ndaselo)\s+a\s+(claude|codex)\b|que\s+(?:lo\s+haga\s+(claude|codex)\b|(claude|codex)\s+(?:lo\s+)?(?:haga|revise|corrija|implemente)\b)|ask\s+(claude|codex)\s+to\b)/i)
+  const agent = match?.slice(1).find(Boolean)?.toLowerCase()
+  if (agent === 'claude' || agent === 'codex') return agent
+  if (lastAgent && /^(?:que (?:lo )?haga (?:el otro|la otra)|(?:dile|p[ií]dele|p[aá]saselo) a(?:l otro| la otra)(?: agente)?)(?:[.! ]|$)/i.test(text.trim())) return otherOf(lastAgent)
+}
+
+export function clearTaskCategory(text: string): BuiltinCategory | undefined {
+  const t = text.trim().replace(/^@(claude|codex)\b\s*/i, '').replace(/^(?:ahora|por favor)[ ,]+/i, '')
+  if (/^(?:expl[ií]ca\w*|qu[eé] hace|c[oó]mo funciona|explain|how does)\b/i.test(t)) return 'explain'
+  if (/^(?:haz|crea|ejecuta|run|make)\s+(?:un\s+|a\s+)?(?:git\s+)?(?:commit|push|pull)\b/i.test(t)) return 'terminal'
+  if (/^(?:dise[ñn]a|planifica|prop[oó]n|design|plan)\b[^.!?]*\b(?:migraci[oó]n|arquitectura|migration|architecture)\b/i.test(t)) return 'plan'
+  if (/^(?:investiga|diagnostica|depura|investigate|diagnose|debug)\b[^.!?]*\b(?:concurrencia|carrera|race condition|deadlock|interbloqueo)\b/i.test(t)) return 'debug'
+  if (/^(?:corrige|ajusta|cambia|fix|adjust|change)\b[^.!?]*\b(?:margen|padding|alineaci[oó]n|scroll|margin|alignment)\b[^.!?]*\b(?:bot[oó]n|modal|panel|lista|button|dialog|list)\b/i.test(t)) return 'frontend'
+  if (/^(?:el |the )?scroll\b[^.!?]*\b(?:panel|lista|modal|list|dialog)\b[^.!?]*\b(?:corr[ií]gelo|arr[eé]glalo|fix it)\b/i.test(t)) return 'frontend'
+  if (/^(?:escribe|a[ñn]ade|crea|ejecuta|write|add|run)\s+(?:(?:los|las|unos?|unas?|the)\s+)?(?:tests?|pruebas)\b/i.test(t)) return 'tests'
+  if (/^(?:revisa|review)\s+(?:(?:el|este|the|this)\s+)?diff\b/i.test(t)) return 'review'
+}
 
 export function classify(text: string): { category?: RouteCategory; scores: Partial<Record<RouteCategory, number>> } {
   const scores: Partial<Record<RouteCategory, number>> = {}
@@ -69,7 +90,7 @@ export function classify(text: string): { category?: RouteCategory; scores: Part
   }
   // "implementar" es genérico: cede ante una categoría más específica
   const ranked = (Object.entries(scores) as [RouteCategory, number][]).sort((a, b) => b[1] - a[1] || (a[0] === 'implement' ? 1 : b[0] === 'implement' ? -1 : 0))
-  return { category: ranked[0]?.[0], scores }
+  return { category: clearTaskCategory(text) ?? ranked[0]?.[0], scores }
 }
 
 export interface RouteContext {
@@ -186,10 +207,16 @@ export function decideRoute(text: string, ctx: RouteContext, cls?: Classificatio
 
   if (requestsComputerControl(t)) return { agent: 'codex', reason: 'Control del ordenador → Codex', method: 'rules' }
 
-  const category = cls ? cls.category : classify(t).category
-  const followUp = !!ctx.lastAgent && (cls ? cls.followUp : FOLLOW_UP.test(t) || (!category && t.length < 80))
-  const method = cls?.via ?? 'rules'
-  const tag = cls ? ` · Jev${cls.confidence !== undefined && category ? ` ${Math.round(cls.confidence * 100)}%` : ''}` : ''
+  const delegated = explicitDelegation(t, ctx.lastAgent)
+  if (delegated && ctx.available[delegated])
+    return { agent: delegated, reason: `Se lo pides a ${AGENT_NAMES[delegated]}`, method: 'rules', delegated: true }
+
+  const explicitCategory = clearTaskCategory(t)
+  const clear = explicitCategory && (!ctx.labels || Object.hasOwn(ctx.labels, explicitCategory)) && (!cls?.category || Object.hasOwn(CATEGORY_CRITERIA, cls.category))
+  const category = (clear ? explicitCategory : undefined) ?? cls?.category ?? classify(t).category
+  const followUp = !!ctx.lastAgent && (CONTINUATION_CONFIRMATION.test(t) || (cls ? cls.followUp : FOLLOW_UP.test(t) || (!category && t.length < 80)))
+  const method = cls?.category === category || followUp && cls?.followUp ? cls?.via ?? 'rules' : 'rules'
+  const tag = cls?.category && cls.category === category ? ` · Jev${cls.confidence !== undefined ? ` ${Math.round(cls.confidence * 100)}%` : ''}` : ''
 
   let agent: AgentId
   let reason: string

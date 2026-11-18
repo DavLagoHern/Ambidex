@@ -108,6 +108,7 @@ export const api = {
   orch: {
     list: bind('orch:list'),
     get: bind('orch:get'),
+    runs: bind('orch:runs'),
     start: bind('orch:start'),
     approvePlan: bind('orch:approvePlan'),
     cancel: bind('orch:cancel'),

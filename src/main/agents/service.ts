@@ -81,6 +81,7 @@ export interface SendOptions {
   schema?: object
   route?: RouteDecision
   allowedTools?: string[]
+  disallowedTools?: string[]
   images?: string[]
   // modelo y razonamiento solo para este turno (el chat único los elige según la dificultad del mensaje)
   model?: string
@@ -146,6 +147,19 @@ export class SessionService {
     return this.d.store.listSessions(projectId).map((s) => this.withRunState(s))
   }
 
+  recentRuns(projectId: string, limit: number): RunInfo[] {
+    return this.d.store.recentRuns(projectId, limit).map(info => this.withLiveRun(info))
+  }
+
+  orchestrationRuns(id: string): RunInfo[] {
+    return this.d.store.orchestrationRuns(id).map(info => this.withLiveRun(info))
+  }
+
+  private withLiveRun(info: RunInfo): RunInfo {
+    const live = this.active.get(info.sessionId)
+    return live?.id === info.id ? { ...info, ...this.runInfo(live, 'running') } : info
+  }
+
   getSession(id: string): SessionMeta | undefined {
     const s = this.d.store.getSession(id)
     return s && this.withRunState(s)
@@ -188,9 +202,13 @@ export class SessionService {
       schema,
       extra: [...(this.d.extraArgs?.(session.agent) ?? []), ...(tools?.extra ?? [])],
       allowedTools: opts.allowedTools || tools?.allowedTools ? [...(opts.allowedTools ?? []), ...(tools?.allowedTools ?? [])] : undefined,
+      disallowedTools: opts.disallowedTools,
       images: images.length ? images : undefined,
       fork: !!session.agentSessionId && !!this.d.forkIfLive?.(session.agent, session.agentSessionId)
     } as RunRequest
+    // Los pasos del equipo son sesiones independientes: guardar el modelo
+    // efectivo permite identificarlo después de recargar sin fijar el del chat.
+    if (session.orchestrationId && req.model && !session.model) store.updateSession(sessionId, { model: req.model })
     if (!schema && !session.orchestrationId && !prompt.startsWith('/') && !['bypassPermissions', 'danger-full-access', 'dontAsk'].includes(session.permission ?? '')) {
       req.approvals = { request: (input, signal) => this.permissions.ask({ runId, sessionId, projectId: session.projectId, agent: session.agent }, input, signal) }
       if (session.agent === 'claude') req.allowedTools = [...(req.allowedTools ?? []), ...this.permissions.rules(sessionId)]
@@ -371,6 +389,10 @@ export class SessionService {
     if (ev.kind === 'structured') {
       run.structured = ev.data
       return
+    }
+    if (ev.kind === 'session' && ev.model && store.getSession(run.sessionId)?.orchestrationId) {
+      store.updateSession(run.sessionId, { model: ev.model })
+      this.pushMeta(run.sessionId)
     }
     if (ev.kind === 'text' && !ev.streaming) run.lastText = ev.text
     const res = reduceEvent(run.items, ev, { cwd: run.cwd, newId: randomUUID, now: Date.now() })

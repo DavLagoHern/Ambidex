@@ -38,6 +38,24 @@ describe('motor de enrutado', () => {
     expect(decideRoute('@codex explícame esto', ctx())).toMatchObject({ agent: 'codex', method: 'mention' })
   })
 
+  it.each([
+    ['Corrige el margen del botón Guardar en el modal', 'review', 'frontend'],
+    ['Investiga una carrera entre dos procesos que sobrescriben trabajos', 'review', 'debug'],
+    ['Diseña la migración de todos los módulos a una arquitectura distribuida', 'implement', 'plan'],
+    ['Ahora haz commit', 'implement', 'terminal']
+  ])('reconoce la instrucción concreta: %s', (message, prediction, expected) => {
+    expect(decideRoute(message, ctx(), { via: 'jev', category: prediction, followUp: false, confidence: 0.9 })).toMatchObject({ category: expected, method: 'rules' })
+  })
+
+  it('no confunde órdenes de delegación con menciones ni pisa categorías propias', () => {
+    const route = ctx({ lastAgent: 'claude' })
+    expect(decideRoute('Dile a Codex que revise estos cambios', route)).toMatchObject({ agent: 'codex', delegated: true })
+    expect(decideRoute('Que lo haga el otro', route)).toMatchObject({ agent: 'codex', delegated: true })
+    expect(decideRoute('Claude me dijo que se lo pida a Codex', route).delegated).toBeUndefined()
+    expect(decideRoute('Explícame cómo funciona Codex', route).delegated).toBeUndefined()
+    expect(decideRoute('Explícame la factura', route, { via: 'jev', category: 'c-pagos', followUp: false }).category).toBe('c-pagos')
+  })
+
   it('los seguimientos siguen con el mismo agente', () => {
     expect(decideRoute('vale, hazlo', ctx({ lastAgent: 'codex' }))).toMatchObject({ agent: 'codex', reason: expect.stringContaining('Sigue') })
   })
@@ -65,7 +83,7 @@ describe('orquestador: validaciones', () => {
       ]
     }
     const c = normalizePlan(raw, 'C', 'claude')
-    expect(c.plan.tasks.map((t) => t.assignee)).toEqual(['claude', 'codex'])
+    expect(c.plan.tasks.map((t) => t.assignee)).toEqual(['claude', 'claude'])
     const deps = c.plan.tasks.flatMap((t) => t.dependsOn)
     expect(deps).not.toContain('T9')
     expect(deps.length).toBe(1) // el ciclo se rompe

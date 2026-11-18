@@ -96,6 +96,28 @@
     await invoke('settings:save',{[agent+'Path']:context.normalPaths[agent+'Path']});
     await invoke('test:window',{width:1100,height:760});
   });
+  await check('Team shows a completed proposal while the other agent is working',async()=>{
+    await invoke('settings:save',context.teamPaths);
+    const teamThread=await invoke('threads:create',project.id);
+    const o=await invoke('orch:start',project.id,{request:'Plan con feedback nativo',mode:'C',options:{maxRounds:1,approvePlan:true,parallel:2}},teamThread.id);
+    await invoke('panel:sync',project.id,'team-test',{layout:'chat',agentView:'auto',activeThread:teamThread.id,sidebar:'chats',panels:{sidebar:true,right:false,activity:false,bottom:false}});
+    const card=await until(()=>[...document.querySelectorAll('.team-card')].find(el=>el.querySelector('.team-activity')));
+    try{await until(()=>card.textContent.includes('1 de 2 propuestas listas. Esperando a Claude Code.')&&card.textContent.includes('Codex propone:')&&card.textContent.includes('fake-planning-model')&&card.textContent.includes('README.md'));}
+    catch(error){throw Error(String(error)+' Team card: '+card.textContent)}
+    const step=await until(()=>[...card.querySelectorAll('.team-step')].find(el=>el.textContent.includes('Claude Code')&&el.textContent.includes('En curso')));
+    await until(()=>step.textContent.includes('README.md'));
+    await invoke('test:window',{width:640,height:720});await until(()=>innerWidth===640);await sleep(80);
+    assert(card.scrollWidth<=card.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth+1,'Team progress overflows at 640 px');
+    await invoke('test:capture','team');
+    [...step.querySelectorAll('button')].find(b=>b.textContent.includes('Ver conversación')).click();
+    await until(()=>document.querySelector('.drawer')?.textContent.includes('Propuesta de Claude Code'));
+    document.querySelector('.drawer button[title="Cerrar"]').click();await until(()=>!document.querySelector('.drawer'));
+    await until(async()=>(await invoke('orch:get',o.id)).status==='awaiting_plan');
+    const stored=await invoke('orch:runs',o.id);assert(stored.length===4&&stored.every(r=>r.status==='completed'),'The step history cannot be recovered');
+    await invoke('orch:discard',o.id);
+    await invoke('settings:save',context.normalPaths);
+    await invoke('test:window',{width:1100,height:760});
+  });
   await check('Threads, queue and project layout persist',async()=>{
     thread=await invoke('threads:create',project.id);await invoke('threads:rename',thread.id,'Native thread');
     const queued=await invoke('queue:add',{projectId:project.id,threadId:thread.id,prompt:'En cola'});
@@ -193,6 +215,11 @@
   });
   await check('Review tabs, diffs and Git rows remain contained while resizing the window',async()=>{
     const rel=context.reviewPath;
+    // Las dos listas deben encoger y desplazarse por dentro, incluso con muchos
+    // archivos. min-height:auto las haría crecer y movería todo el panel.
+    const scrollFiles=Array.from({length:32},(_,i)=>'scroll-file-'+i+'.txt');
+    await Promise.all(scrollFiles.map(path=>invoke('fs:write',root+'/'+path,'Scroll regression\n')));
+    await invoke('git:stage',root,scrollFiles.slice(0,12));
     const before=(await invoke('fs:read',root+'/'+rel)).content;
     await invoke('fs:write',root+'/'+rel,before.replace('old value 27','new value 27').replace('old value 72','new value 72')+'const veryLongLine = "'+('long value '.repeat(100))+'";\n');
     const tabs=Array.from({length:12},(_,i)=>({id:'native-review-'+i,kind:'diff',cwd:root,rel,mode:'unstaged',title:'AgentPanel-review-'+i+' (cambios)'}));
@@ -222,7 +249,17 @@
       const frame=strip.getBoundingClientRect();
       assert(selected.left>=frame.left-1&&selected.right<=frame.right+1,'The selected review tab is lost outside the tab strip');
     };
-    await contained(1200,800);await invoke('test:capture','wide');
+    await contained(1200,800);
+    await until(()=>document.querySelectorAll('.sec-changes .file-row').length>=20);
+    for(const selector of ['.sec-staged > .section-scroll','.sec-changes > .section-scroll']){
+      const list=document.querySelector(selector);assert(list,selector+' missing');
+      assert(list.scrollHeight>list.clientHeight+1,selector+' has no internal overflow');
+      assert(list.clientHeight>=3*26,selector+' hides the minimum file rows');
+      list.scrollTop=100;assert(list.scrollTop>0,selector+' does not scroll');list.scrollTop=0;
+    }
+    const body=document.querySelector('.git-body');
+    assert(body.scrollHeight<=body.clientHeight+1,'The file lists push scrolling onto the entire Git panel');
+    await invoke('test:capture','wide');
     await contained(640,640);
     const strip=document.querySelector('.editor-tabs .tabs'),initial=strip.scrollLeft;
     document.querySelector('button[title="Desplazar pestañas a la izquierda"]').click();

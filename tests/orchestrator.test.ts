@@ -12,7 +12,7 @@ import { cleanupTmp, FAKE_CLI, FIXTURES, git, initRepo, memoryStore, tmpDir, wai
 
 afterEach(cleanupTmp)
 
-function setup(env: Record<string, string> = {}) {
+function setup(env: Record<string, string> = {}, agentTimeoutMs?: () => number) {
   const store = memoryStore()
   const repo = initRepo()
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'demo', scripts: { test: 'node -e "process.exit(0)"' } }))
@@ -37,7 +37,7 @@ function setup(env: Record<string, string> = {}) {
   })
   dispatcher = new Dispatcher({ store, service, push, settings: () => store.getSettings(), available: () => true })
   const wtBase = tmpDir()
-  const orch = new Orchestrator({ store, service, push, settings: () => store.getSettings(), worktreeBase: () => wtBase, env: () => process.env })
+  const orch = new Orchestrator({ store, service, push, settings: () => store.getSettings(), worktreeBase: () => wtBase, env: () => process.env, agentTimeoutMs })
   return { store, repo, project, orch, service, dispatcher, pushed }
 }
 
@@ -45,6 +45,50 @@ const start = (s: ReturnType<typeof setup>, mode: OrchMode, approvePlan = false)
   s.orch.start(s.project.id, { request: 'Implementa la funcionalidad X', mode, options: { maxRounds: 2, approvePlan, parallel: 2 } })
 
 describe('orquestador (agentes simulados con el formato real de cada CLI)', () => {
+  it('detiene al proponente bloqueado y sigue con el plan del otro', async () => {
+    const s = setup({ FAKE_PROPOSAL_DELAY_CLAUDE_MS: '60000' }, () => 1500)
+    const o = await start(s, 'C', true)
+    await waitFor(() => s.orch.get(o.id)!.status === 'awaiting_plan', 10000)
+    expect(s.orch.get(o.id)!.messages.some(m => m.text.includes('agotó el tiempo'))).toBe(true)
+    expect(s.orch.get(o.id)!.messages.some(m => m.text.includes('Solo hay una propuesta (Codex)'))).toBe(true)
+    expect(s.service.runningCount()).toBe(0)
+  })
+  it('publica cada propuesta antes de acabar las dos y permite recuperar sus ejecuciones', async () => {
+    const s = setup({ FAKE_PROPOSAL_DELAY_CLAUDE_MS: '1200' })
+    const o = await start(s, 'C', true)
+    await waitFor(() => s.orch.get(o.id)!.messages.some(m => m.from === 'codex' && m.kind === 'plan'))
+    const partial = s.orch.get(o.id)!
+    expect(partial.status).toBe('planning')
+    expect(partial.messages.some(m => m.from === 'claude' && m.kind === 'plan')).toBe(false)
+    expect(partial.messages.find(m => m.from === 'codex' && m.kind === 'plan')?.text).toContain('T1: Parte de Claude')
+    const runs = s.service.orchestrationRuns(o.id)
+    expect(runs.find(r => r.agent === 'claude')?.status).toBe('running')
+    expect(runs.find(r => r.agent === 'claude')?.lastActivityAt).toBeGreaterThan(0)
+    expect(runs.find(r => r.agent === 'codex')?.status).toBe('completed')
+    const claude = s.store.listSessions(s.project.id).find(x => x.orchestrationId === o.id && x.agent === 'claude')!
+    expect(claude.model).toBe('fake-planning-model')
+    expect(claude.effort).toBe('medium')
+    const cliArgs = JSON.parse((s.store.db.prepare('SELECT args FROM runs WHERE id = ?').get(runs.find(r => r.agent === 'claude')!.id) as { args: string }).args)
+    expect(cliArgs).toEqual(expect.arrayContaining(['--disallowedTools', 'Agent,Task', '--effort', 'medium']))
+    // Cancelar conserva la propuesta recibida y no permite avanzar al acuerdo.
+    await s.orch.cancel(o.id)
+    await waitFor(() => s.service.runningCount() === 0)
+    expect(s.orch.get(o.id)!.status).toBe('cancelled')
+    expect(s.orch.get(o.id)!.messages.some(m => m.from === 'codex' && m.kind === 'plan')).toBe(true)
+  })
+  it('respeta los modelos y el razonamiento elegidos por el usuario al planificar', async () => {
+    const s = setup()
+    s.store.saveSettings({ claudeModel: 'opus', codexModel: 'gpt-6.1-sol', claudeEffort: 'high', codexEffort: 'low' })
+    const o = await start(s, 'C', true)
+    await waitFor(() => s.orch.get(o.id)!.status === 'awaiting_plan', 15000)
+    const sessions = s.store.listSessions(s.project.id).filter(x => x.orchestrationId === o.id)
+    expect(sessions.filter(x => x.agent === 'claude').every(x => x.effort === 'high')).toBe(true)
+    expect(sessions.filter(x => x.agent === 'codex').every(x => x.model === 'gpt-6.1-sol' && x.effort === 'low')).toBe(true)
+    for (const run of s.service.orchestrationRuns(o.id).filter(x => x.agent === 'claude')) {
+      const args = JSON.parse((s.store.db.prepare('SELECT args FROM runs WHERE id = ?').get(run.id) as { args: string }).args)
+      expect(args).toEqual(expect.arrayContaining(['--model', 'opus']))
+    }
+  })
   it('modo C: plan → paralelo → intercambio → revisión cruzada → integración → pruebas → aprobación → integrar', async () => {
     const s = setup()
     const o = await start(s, 'C', true)

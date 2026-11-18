@@ -274,7 +274,7 @@ function handlers(): Handlers { return {
       if (info) push('run:status', info)
       return r
     },
-'runs:recent': (projectId, limit) => store.recentRuns(projectId, Math.min(limit, 200)),
+'runs:recent': (projectId, limit) => service.recentRuns(projectId, Math.min(limit, 200)),
 'threads:list': (projectId) => store.listThreads(projectId),
 'threads:create': (projectId) => dispatcher.createThread(projectId),
 'threads:rename': (id, title) => {
@@ -322,6 +322,7 @@ function handlers(): Handlers { return {
 'queue:sendNow': (id, to) => dispatcher.sendNow(id, to),
 'orch:list': (projectId) => orchestrator.list(projectId),
 'orch:get': (id) => orchestrator.get(id),
+'orch:runs': (id) => service.orchestrationRuns(id),
 'orch:start': async (projectId, req, threadId) => {
       const o = await orchestrator.start(projectId, req, threadId)
       // la petición al equipo da nombre a la conversación si aún no lo tiene

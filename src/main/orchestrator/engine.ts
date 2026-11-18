@@ -8,7 +8,7 @@ import { titleFromPrompt } from '@shared/chat'
 import {
   ACTIVE_STATUSES, agreementPrompt, conflictPrompt, consolidatePrompt, FileChange, finalFixPrompt, finalReviewPrompt, fixPrompt, normalizePlan,
   normalizeReview, OrchMessage, OrchStart, OrchStatus, OrchTask, OrchWorktree, Orchestration, other, parseJsonLoose, PLAN_SCHEMA, Plan, planPrompt,
-  PlanTask, proposalPrompt, Review, REVIEW_SCHEMA, reviewPrompt, revisePlanPrompt, safeTestCommand, slugify, summaryPrompt, taskPrompt, testFixPrompt
+  PlanTask, PLANNING_SCOPE, proposalPrompt, Review, REVIEW_SCHEMA, reviewPrompt, revisePlanPrompt, safeTestCommand, slugify, summaryPrompt, taskPrompt, testFixPrompt
 } from '@shared/orchestrator'
 import type { Store } from '../db/store'
 import { repoRoot } from '../git'
@@ -23,6 +23,7 @@ export interface EngineDeps {
   settings: () => Settings
   worktreeBase: () => string
   env: () => NodeJS.ProcessEnv
+  agentTimeoutMs?: (write: boolean) => number
 }
 
 class Cancelled extends Error {
@@ -30,8 +31,26 @@ class Cancelled extends Error {
     super('Cancelado')
   }
 }
+class AgentStillRunning extends Error {}
 
 const TERMINAL: OrchStatus[] = ['integrated', 'discarded', 'failed', 'cancelled']
+const AGENT_TIMEOUT_MS = { read: 3 * 60_000, write: 15 * 60_000 }
+
+async function within<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let abort: (() => void) | undefined
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => {
+      abort = () => resolve(undefined)
+      if (signal?.aborted) return abort()
+      signal?.addEventListener('abort', abort, { once: true })
+      timer = setTimeout(abort, ms)
+    })])
+  } finally {
+    clearTimeout(timer)
+    if (abort) signal?.removeEventListener('abort', abort)
+  }
+}
 
 // En las tareas del equipo, Claude puede comprobar su trabajo: solo pruebas y lectura de Git, nada más
 export const TEAM_ALLOWED_TOOLS = [
@@ -45,6 +64,7 @@ const WRITE_CLAUDE: Permission[] = ['acceptEdits', 'auto', 'bypassPermissions']
 export class Orchestrator {
   private driving = new Set<string>()
   private cancelled = new Set<string>()
+  private stops = new Map<string, AbortController>()
   private sessions = new Map<string, Set<string>>()
   private tests = new Map<string, ManagedProcess>()
 
@@ -152,10 +172,11 @@ export class Orchestrator {
 
   async cancel(id: string) {
     const o = this.get(id)
-    if (!o || TERMINAL.includes(o.status)) return
+    if (!o || !ACTIVE_STATUSES.includes(o.status) || this.cancelled.has(id)) return
     this.cancelled.add(id)
-    this.tests.get(id)?.cancel(500)
-    await Promise.all([...(this.sessions.get(id) ?? [])].map((sid) => this.d.service.cancel(sid)))
+    this.stops.get(id)?.abort()
+    void this.tests.get(id)?.cancel(500).catch(() => {})
+    await within(Promise.allSettled([...(this.sessions.get(id) ?? [])].map((sid) => this.d.service.cancel(sid))), 5000)
     this.d.store.updateOrchestration(id, { status: 'cancelled', resumeStatus: ACTIVE_STATUSES.includes(o.status) ? o.status : null })
     for (const t of o.tasks) if (['running', 'reviewing', 'fixing'].includes(t.status)) this.d.store.updateTask(t.id, { status: 'pending' })
     this.msg(id, 'user', 'warning', 'Cancelado. Los worktrees se conservan; puedes reanudar o limpiarlos.')
@@ -166,6 +187,7 @@ export class Orchestrator {
     const o = this.get(id)
     if (!o) throw new Error('Orquestación no encontrada')
     if (!['interrupted', 'needs_user', 'cancelled', 'failed'].includes(o.status)) throw new Error('No hay nada que reanudar')
+    this.requireIdle(id)
     this.cancelled.delete(id)
     for (const t of o.tasks) if (['running', 'reviewing', 'fixing', 'failed'].includes(t.status)) this.d.store.updateTask(t.id, { status: 'pending', error: null })
     const prev = this.d.store.resumeStatusOf(id)
@@ -173,6 +195,11 @@ export class Orchestrator {
     this.d.store.updateOrchestration(id, { status: next, resumeStatus: null, error: null })
     this.msg(id, 'user', 'info', 'Reanudado.')
     this.drive(id)
+  }
+
+  private requireIdle(id: string) {
+    if (this.driving.has(id) || this.tests.get(id)?.running || this.d.service.orchestrationRuns(id).some((r) => r.status === 'running'))
+      throw new Error('El equipo sigue cerrando una ejecución. Espera a que se detenga antes de continuar.')
   }
 
   // Al arrancar la app: lo que estaba en marcha queda interrumpido (no se finge que sigue)
@@ -189,6 +216,7 @@ export class Orchestrator {
   private async drive(id: string) {
     if (this.driving.has(id)) return
     this.driving.add(id)
+    this.stops.set(id, new AbortController())
     try {
       for (;;) {
         this.check(id)
@@ -201,12 +229,14 @@ export class Orchestrator {
         else return
       }
     } catch (e) {
-      if (e instanceof Cancelled) return
+      if (e instanceof Cancelled || this.cancelled.has(id)) return
       const message = (e as Error).message || String(e)
       this.d.store.updateOrchestration(id, { status: 'failed', error: message })
       this.msg(id, 'system', 'error', message)
     } finally {
       this.driving.delete(id)
+      this.sessions.delete(id)
+      this.stops.delete(id)
     }
   }
 
@@ -218,7 +248,8 @@ export class Orchestrator {
     return rel && !rel.startsWith('..') ? join(root, rel) : root
   }
 
-  private async runAgent(o: Orchestration, r: { agent: AgentId; cwd: string; title: string; prompt: string; write: boolean; schema?: object }): Promise<RunOutcome> {
+  private async runAgent(o: Orchestration, r: { agent: AgentId; cwd: string; title: string; prompt: string; write: boolean; schema?: object; planning?: boolean }): Promise<RunOutcome> {
+    this.check(o.id)
     const s = this.d.settings()
     const permission: Permission = r.write
       ? r.agent === 'claude'
@@ -230,7 +261,7 @@ export class Orchestrator {
       title: r.title,
       orchestrationId: o.id,
       model: r.agent === 'claude' ? s.claudeModel : s.codexModel,
-      effort: r.agent === 'claude' ? s.claudeEffort : s.codexEffort,
+      effort: (r.agent === 'claude' ? s.claudeEffort : s.codexEffort) || (r.planning ? 'medium' : undefined),
       permission
     })
     this.d.push('session:meta', session)
@@ -238,10 +269,23 @@ export class Orchestrator {
     this.sessions.set(o.id, set)
     set.add(session.id)
     try {
-      const { done } = this.d.service.send(session.id, r.prompt, undefined, { schema: r.schema, allowedTools: r.write && r.agent === 'claude' ? TEAM_ALLOWED_TOOLS : undefined })
-      const out = await done
+      const prompt = r.planning ? `${PLANNING_SCOPE}\n\n${r.prompt}` : r.prompt
+      const { runId, done } = this.d.service.send(session.id, prompt, undefined, {
+        schema: r.schema,
+        allowedTools: r.write && r.agent === 'claude' ? TEAM_ALLOWED_TOOLS : undefined,
+        disallowedTools: r.planning && r.agent === 'claude' ? ['Agent', 'Task'] : undefined
+      })
+      const limit = this.d.agentTimeoutMs?.(r.write) ?? (r.write ? AGENT_TIMEOUT_MS.write : AGENT_TIMEOUT_MS.read)
+      const signal = this.stops.get(o.id)?.signal
+      const out = await within(done, limit, signal)
       this.check(o.id)
-      return out
+      if (out) return out
+      const error = `${AGENT_NAMES[r.agent]} agotó el tiempo en «${r.title}» (${Math.round(limit / 1000)} s).`
+      this.msg(o.id, 'system', 'warning', error)
+      void this.d.service.cancel(session.id).catch(() => {})
+      if (!await within(done, 5000)) throw new AgentStillRunning(`${error} El proceso aún no se ha cerrado.`)
+      this.check(o.id)
+      return { runId, sessionId: session.id, status: 'failed', text: '', error }
     } finally {
       set.delete(session.id)
     }
@@ -276,7 +320,8 @@ export class Orchestrator {
       title: `Plan · ${titleFromPrompt(o.request)}`,
       prompt: planPrompt(o.request, o.mode, planner),
       write: false,
-      schema: PLAN_SCHEMA
+      schema: PLAN_SCHEMA,
+      planning: true
     })
     if (r.status !== 'completed') throw new Error(r.error || `${AGENT_NAMES[planner]} no pudo completar el plan`)
     const { plan, notes } = normalizePlan(r.structured ?? parseJsonLoose(r.text), o.mode, planner)
@@ -290,22 +335,24 @@ export class Orchestrator {
     const partner = other(planner)
     const cwd = this.agentCwd(o, o.repo)
     this.msg(o.id, 'system', 'info', 'Fase 1 · Propuestas: cada agente propone un plan por su cuenta, sin ver el del otro.')
-    const ask = (agent: AgentId) =>
-      this.runAgent(o, { agent, cwd, title: `Propuesta de ${AGENT_NAMES[agent]} · ${titleFromPrompt(o.request)}`, prompt: proposalPrompt(o.request, agent), write: false, schema: PLAN_SCHEMA })
-    const settled = await Promise.allSettled([ask(planner), ask(partner)])
-    for (const r of settled) if (r.status === 'rejected' && r.reason instanceof Cancelled) throw r.reason
-    const proposals: { agent: AgentId; plan: Plan }[] = []
-    settled.forEach((r, i) => {
-      const agent = i === 0 ? planner : partner
+    const ask = async (agent: AgentId) => {
       try {
-        if (r.status !== 'fulfilled' || r.value.status !== 'completed') throw new Error(r.status === 'fulfilled' ? r.value.error || 'no terminó' : String(r.reason))
-        const { plan } = normalizePlan(r.value.structured ?? parseJsonLoose(r.value.text), 'C', agent)
-        proposals.push({ agent, plan })
-        this.msg(o.id, agent, 'plan', `${AGENT_NAMES[agent]} propone: ${plan.summary}\n${plan.tasks.length} tareas`, 'system')
+        const result = await this.runAgent(o, { agent, cwd, title: `Propuesta de ${AGENT_NAMES[agent]} · ${titleFromPrompt(o.request)}`, prompt: proposalPrompt(o.request, agent), write: false, schema: PLAN_SCHEMA, planning: true })
+        if (result.status !== 'completed') throw new Error(result.error || 'no terminó')
+        const { plan } = normalizePlan(result.structured ?? parseJsonLoose(result.text), 'C', agent)
+        const tasks = plan.tasks.map(t => `· ${t.id}: ${t.title} (${AGENT_NAMES[t.assignee]})`).join('\n')
+        // Publicar al terminar cada propuesta; no esperar a la más lenta.
+        this.msg(o.id, agent, 'plan', `${AGENT_NAMES[agent]} propone: ${plan.summary}\n${plan.tasks.length} tareas\n${tasks}`, 'system')
+        return { agent, plan }
       } catch (e) {
+        if (e instanceof Cancelled || e instanceof AgentStillRunning) throw e
         this.msg(o.id, 'system', 'warning', `${AGENT_NAMES[agent]} no pudo hacer su propuesta (${(e as Error).message.split('\n')[0].slice(0, 120)}).`)
+        throw e
       }
-    })
+    }
+    const settled = await Promise.allSettled([ask(planner), ask(partner)])
+    for (const r of settled) if (r.status === 'rejected' && (r.reason instanceof Cancelled || r.reason instanceof AgentStillRunning)) throw r.reason
+    const proposals = settled.flatMap(r => r.status === 'fulfilled' ? [r.value] : [])
     if (!proposals.length) throw new Error('Ninguno de los dos agentes pudo proponer un plan')
 
     let plan: Plan
@@ -317,23 +364,23 @@ export class Orchestrator {
       this.msg(o.id, 'system', 'info', `Fase 2 · Acuerdo: ${AGENT_NAMES[planner]} junta las dos propuestas en un plan y reparte el trabajo.`)
       const best = proposals.find((p) => p.agent === planner) ?? proposals[0]
       try {
-        const r = await this.runAgent(o, { agent: planner, cwd, title: `Plan acordado · ${titleFromPrompt(o.request)}`, prompt: consolidatePrompt(o.request, proposals), write: false, schema: PLAN_SCHEMA })
+        const r = await this.runAgent(o, { agent: planner, cwd, title: `Plan acordado · ${titleFromPrompt(o.request)}`, prompt: consolidatePrompt(o.request, proposals), write: false, schema: PLAN_SCHEMA, planning: true })
         if (r.status !== 'completed') throw new Error(r.error || 'no terminó')
         ;({ plan, notes } = normalizePlan(r.structured ?? parseJsonLoose(r.text), 'C', planner))
       } catch (e) {
-        if (e instanceof Cancelled) throw e
+        if (e instanceof Cancelled || e instanceof AgentStillRunning) throw e
         plan = best.plan
         this.msg(o.id, 'system', 'warning', `No se pudieron juntar las propuestas (${(e as Error).message.split('\n')[0].slice(0, 120)}): se usa la de ${AGENT_NAMES[best.agent]}.`)
       }
       this.msg(o.id, planner, 'plan', `Plan acordado: ${plan.summary}`)
       // el otro agente da su conformidad (o pide ajustes, que se incorporan una vez)
       try {
-        const rv = await this.runAgent(o, { agent: partner, cwd, title: `Conformidad con el plan · ${AGENT_NAMES[partner]}`, prompt: agreementPrompt(o.request, plan, planner), write: false, schema: REVIEW_SCHEMA })
+        const rv = await this.runAgent(o, { agent: partner, cwd, title: `Conformidad con el plan · ${AGENT_NAMES[partner]}`, prompt: agreementPrompt(o.request, plan, planner), write: false, schema: REVIEW_SCHEMA, planning: true })
         const verdict = rv.status === 'completed' ? normalizeReview(rv.structured ?? parseJsonLoose(rv.text)) : undefined
         if (verdict?.verdict === 'approve') this.msg(o.id, partner, 'review', `${AGENT_NAMES[partner]} está de acuerdo con el plan. ${verdict.summary}`, planner)
         else if (verdict) {
           this.msg(o.id, partner, 'review', `${AGENT_NAMES[partner]} pide ajustes al plan:\n${verdict.issues.map((i) => `· [${i.severity}] ${i.description}`).join('\n')}`, planner)
-          const rp = await this.runAgent(o, { agent: planner, cwd, title: `Plan · ajustes de ${AGENT_NAMES[partner]}`, prompt: revisePlanPrompt(o.request, plan, verdict, partner), write: false, schema: PLAN_SCHEMA })
+          const rp = await this.runAgent(o, { agent: planner, cwd, title: `Plan · ajustes de ${AGENT_NAMES[partner]}`, prompt: revisePlanPrompt(o.request, plan, verdict, partner), write: false, schema: PLAN_SCHEMA, planning: true })
           if (rp.status === 'completed') {
             const revised = normalizePlan(rp.structured ?? parseJsonLoose(rp.text), 'C', planner)
             plan = revised.plan
@@ -342,7 +389,7 @@ export class Orchestrator {
           }
         }
       } catch (e) {
-        if (e instanceof Cancelled) throw e
+        if (e instanceof Cancelled || e instanceof AgentStillRunning) throw e
         this.msg(o.id, 'system', 'warning', `No se pudo confirmar el plan con ${AGENT_NAMES[partner]}; sigue adelante tal cual.`)
       }
     }
@@ -404,6 +451,7 @@ export class Orchestrator {
         break
       }
       await Promise.race(running.values())
+      if (this.cancelled.has(id)) await Promise.allSettled(running.values())
     }
     const o = this.get(id)!
     if (o.mode === 'E') {
@@ -429,9 +477,7 @@ export class Orchestrator {
       if (!dep) continue
       handoffs.push(`- ${dep.key} (${AGENT_NAMES[dep.assignee]}): ${dep.title}. ${(dep.result?.summary ?? '').slice(0, 700)}${dep.result?.files.length ? ` Ficheros: ${dep.result.files.join(', ')}` : ''}`)
       if (dep.assignee === agent || !dep.result?.commit) continue
-      const src = this.worktreeOf(o, dep.assignee)
-      if (!src) continue
-      const r = await g.mergeBranch(wt.path, src.branch)
+      const r = await g.mergeBranch(wt.path, dep.result.commit)
       if (r.ok) this.msg(id, dep.assignee, 'handoff', `Entrega ${dep.key} a ${AGENT_NAMES[agent]}: su trabajo se incorpora a la rama de ${AGENT_NAMES[agent]}`, agent)
       else {
         conflicts.push(...r.conflicts)
@@ -439,6 +485,7 @@ export class Orchestrator {
       }
     }
     const base = await g.head(wt.path)
+    this.check(id)
     const cwd = this.agentCwd(o, wt.path)
     this.msg(id, agent, 'info', `${AGENT_NAMES[agent]} empieza ${t.key}: ${t.title}`)
     const r = await this.runAgent(o, { agent, cwd, title: `${t.key} · ${t.title}`, prompt: taskPrompt({ request: o.request, plan: o.plan, task: t, branch: wt.branch, handoffs, conflicts }), write: true })
@@ -497,6 +544,7 @@ export class Orchestrator {
         this.msg(id, agent, 'fix', `Corrige ${t.key}: ${summary.split('\n')[0].slice(0, 220)}`, rev)
       }
     }
+    this.check(id)
     this.d.store.updateTask(t.id, { status: 'done', endedAt: Date.now() })
     this.emit(id)
   }
@@ -504,6 +552,7 @@ export class Orchestrator {
   private async integrateBranches(id: string) {
     let o = this.get(id)!
     const wt = await this.ensureWorktree(o, 'integration')
+    this.check(id)
     o = this.get(id)!
     const cwd = this.agentCwd(o, wt.path)
     // reanudación tras resolver conflictos a mano
@@ -513,6 +562,7 @@ export class Orchestrator {
       await g.finishMerge(wt.path)
     }
     for (const agent of ['claude', 'codex'] as AgentId[]) {
+      this.check(id)
       const src = this.worktreeOf(o, agent)
       if (!src || !o.tasks.some((t) => t.assignee === agent && t.result?.commit)) continue
       const r = await g.mergeBranch(wt.path, src.branch)
@@ -531,6 +581,7 @@ export class Orchestrator {
       await g.finishMerge(wt.path)
       this.msg(id, resolver, 'integration', 'Conflictos de integración resueltos')
     }
+    this.check(id)
     this.setStatus(id, 'testing')
   }
 
@@ -553,6 +604,7 @@ export class Orchestrator {
   }
 
   private async runTests(id: string, argv: string[], cwd: string): Promise<{ ok: boolean; output: string; ms: number; code: number | null }> {
+    this.check(id)
     const started = Date.now()
     let output = ''
     const proc = new ManagedProcess(
@@ -563,13 +615,18 @@ export class Orchestrator {
       }
     )
     this.tests.set(id, proc)
-    const timer = setTimeout(() => proc.cancel(1000), 10 * 60 * 1000)
-    const exit = await proc.done
-    clearTimeout(timer)
-    this.tests.delete(id)
+    void proc.done.then(() => { if (this.tests.get(id) === proc) this.tests.delete(id) })
+    let exit = await within(proc.done, 10 * 60 * 1000, this.stops.get(id)?.signal)
+    this.check(id)
+    if (!exit) {
+      void proc.cancel(1000).catch(() => {})
+      exit = await within(proc.done, 5000)
+      if (!exit) throw new Error('Las pruebas agotaron el tiempo y el proceso aún no se ha cerrado.')
+      output += '\nLas pruebas agotaron el límite de 10 minutos.'
+    }
     this.check(id)
     if (exit.spawnError) output += `\n${exit.spawnError}`
-    return { ok: exit.code === 0 && !exit.spawnError, output: output.trim(), ms: Date.now() - started, code: exit.code }
+    return { ok: exit.code === 0 && !exit.spawnError && !exit.cancelled, output: output.trim(), ms: Date.now() - started, code: exit.code }
   }
 
   private async test(id: string) {
@@ -614,7 +671,7 @@ export class Orchestrator {
     let o = this.get(id)!
     const planner = o.planner ?? 'claude'
     const settle = <T,>(rs: PromiseSettledResult<T>[]) => {
-      for (const r of rs) if (r.status === 'rejected' && r.reason instanceof Cancelled) throw r.reason
+      for (const r of rs) if (r.status === 'rejected' && (r.reason instanceof Cancelled || r.reason instanceof AgentStillRunning)) throw r.reason
     }
     const testNote = (): string => {
       const t = this.get(id)!.testResult
@@ -670,7 +727,7 @@ export class Orchestrator {
       })
       if (sm.status === 'completed' && sm.text.trim()) this.msg(id, planner, 'summary', sm.text.trim(), 'user')
     } catch (e) {
-      if (e instanceof Cancelled) throw e
+      if (e instanceof Cancelled || e instanceof AgentStillRunning) throw e
       this.msg(id, 'system', 'warning', 'No se pudo redactar el resumen final.')
     }
   }
@@ -721,6 +778,7 @@ export class Orchestrator {
   discard(id: string) {
     const o = this.get(id)
     if (!o || TERMINAL.includes(o.status)) return
+    this.requireIdle(id)
     this.d.store.updateOrchestration(id, { status: 'discarded' })
     this.msg(id, 'user', 'warning', 'Descartado. Los worktrees se conservan hasta que los limpies.')
   }
@@ -729,6 +787,7 @@ export class Orchestrator {
     const o = this.get(id)
     if (!o) return
     if (!TERMINAL.includes(o.status)) throw new Error('Solo se pueden limpiar orquestaciones terminadas, descartadas o canceladas')
+    this.requireIdle(id)
     for (const w of o.worktrees.filter((x) => x.status === 'active')) {
       await g.removeWorktree(o.repo, w.path)
       await g.deleteBranch(o.repo, w.branch)

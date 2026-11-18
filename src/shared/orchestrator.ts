@@ -157,6 +157,14 @@ export interface OrchStart {
 
 export const other = (a: AgentId): AgentId => (a === 'claude' ? 'codex' : 'claude')
 
+export const PLANNING_SCOPE = `Esta es una fase de planificación breve, previa al desarrollo.
+- Haz una exploración dirigida: empieza por las instrucciones, la estructura y los puntos de entrada pertinentes. Limítate a unas 8–12 lecturas o búsquedas útiles y redacta el plan con lo que sabes.
+- No hagas una auditoría exhaustiva, no implementes cambios ni ejecutes pruebas, compilaciones o benchmarks en esta fase.
+- Trabaja directamente: no lances subagentes ni uses Agent o Task. No consultes servicios externos para preparar este plan local.
+- Si recibes propuestas, un plan o una revisión, úsalos como base; no vuelvas a explorar todo el repositorio.
+- Deja las comprobaciones detalladas para las tareas del plan. Señala lo no verificado como hipótesis o criterio de aceptación, sin presentarlo como un hecho.
+- Entrega el resultado estructurado solicitado; no crees un fichero de plan aparte.`
+
 // ---------- esquemas (compatibles con el modo estricto de Codex: todo requerido, sin propiedades extra) ----------
 
 export const PLAN_SCHEMA = {
@@ -235,7 +243,10 @@ export function normalizePlan(raw: unknown, mode: OrchMode, planner: AgentId): {
   const seen = new Set<string>()
   let tasks: PlanTask[] = r.tasks.slice(0, 12).map((t, i) => {
     let id = String(t?.id || `T${i + 1}`).trim().replace(/\s+/g, '')
-    if (seen.has(id)) id = `T${i + 1}`
+    if (!id || seen.has(id)) {
+      id = `T${i + 1}`
+      while (seen.has(id)) id += '_'
+    }
     seen.add(id)
     const assignee: AgentId = t?.assignee === 'codex' ? 'codex' : 'claude'
     return {
@@ -274,9 +285,7 @@ export function normalizePlan(raw: unknown, mode: OrchMode, planner: AgentId): {
     const impl = other(planner)
     tasks = tasks.map((t) => ({ ...t, assignee: impl }))
   } else if (mode === 'C' && tasks.length > 1 && tasks.every((t) => t.assignee === tasks[0].assignee)) {
-    // si el planificador no repartió, se alternan las tareas para aprovechar a los dos agentes
-    tasks = tasks.map((t, i) => ({ ...t, assignee: i % 2 === 0 ? tasks[0].assignee : other(tasks[0].assignee) }))
-    notes.push('El plan asignaba todo a un agente; se ha repartido entre los dos.')
+    notes.push('El plan asigna la implementación a un agente; el otro se encarga de la revisión.')
   }
   return { plan: { summary: String(r.summary || '').trim(), testCommand: String(r.testCommand || '').trim(), tasks }, notes }
 }
