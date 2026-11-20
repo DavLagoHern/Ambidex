@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useState } from 'react'
 import type { AgentId, AgentInfo, AgentModelPolicy, AppInfo, ClaudeMode, CliUpdate, CodexSandbox, JevTest, ModelTier, RouteCategory, SavedPrompt, Settings as S, Theme } from '@shared/types'
 import { AGENT_NAMES, DEFAULT_MODEL_POLICY, DEFAULT_PROMPTS, DEFAULT_ROUTE_PREFS } from '@shared/types'
 import { ORCH_MODES, OrchMode } from '@shared/orchestrator'
+import { exportSettings, parseSettingsFile } from '@shared/settings-transfer'
 import { CATEGORY_LABELS, DEFAULT_CATEGORIES, DIFFICULTY_CRITERIA, difficultyCriteria, routeCategories, TIER_LABELS } from '@shared/router'
 import { api } from '../lib/api'
 import { confirmAsync, refreshAgents, restartToUpdate, saveSettings, setApp, toast, useApp } from '../lib/app-store'
@@ -706,6 +707,75 @@ function Shortcuts() {
   )
 }
 
+// Pasar la configuración a otro equipo: sale como JSON (portapapeles) y entra pegado o desde un fichero.
+function TransferSection() {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const current = useApp((st) => st.settings)
+
+  const apply = async (raw: string) => {
+    try {
+      const { settings: incoming, ignored } = parseSettingsFile(raw)
+      const keys = Object.keys(incoming)
+      const ok = await confirmAsync(
+        `¿Importar ${keys.length} ajustes?`,
+        `Sustituyen a los de este equipo: ${keys.join(', ')}.${ignored.length ? `\nSe ignoran: ${ignored.join(', ')}.` : ''}\nRutas de CLI, carpetas y proyectos no cambian.`
+      )
+      if (!ok) return
+      setBusy(true)
+      await saveSettings(incoming)
+      setText('')
+      toast(`Ajustes importados (${keys.length})`, 'success')
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <Row label="Exportar ajustes" hint="Copia al portapapeles modelos, enrutado, equipo, permisos, tema, prompts y diseños. No incluye conversaciones, proyectos, rutas ni credenciales.">
+        <button
+          className="btn small"
+          onClick={() => {
+            if (!current) return
+            navigator.clipboard
+              .writeText(JSON.stringify(exportSettings(current), null, 2))
+              .then(() => toast('Ajustes copiados. Pégalos en Importar en el otro equipo.', 'success'))
+              .catch(() => toast('No se pudo copiar al portapapeles', 'error'))
+          }}
+        >
+          Copiar
+        </button>
+      </Row>
+      <Row label="Importar ajustes" hint="Pega aquí lo exportado en otro equipo, o elige el fichero .json.">
+        <div className="col gap" style={{ alignItems: 'stretch', width: '100%' }}>
+          <textarea className="input mono small" rows={4} placeholder='{"format":"ambidex-settings", …}' value={text} onChange={(e) => setText(e.target.value)} />
+          <div className="row gap">
+            <button className="btn small" disabled={busy || !text.trim()} onClick={() => apply(text)}>
+              Importar
+            </button>
+            <label className="btn small ghost" style={{ cursor: 'pointer' }}>
+              Elegir fichero…
+              <input
+                type="file"
+                accept=".json,application/json"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (f) f.text().then(apply, () => toast('No se pudo leer el fichero', 'error'))
+                }}
+              />
+            </label>
+          </div>
+        </div>
+      </Row>
+    </>
+  )
+}
+
 function DataSection() {
   const [info, setInfo] = useState<AppInfo | null>(null)
   useEffect(() => {
@@ -730,6 +800,7 @@ function DataSection() {
           Ambidex {info?.version} · {info?.runtime} · {info?.webview}
         </span>
       </Row>
+      <TransferSection />
     </>
   )
 }

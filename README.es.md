@@ -205,6 +205,7 @@ npm run test:e2e      # aplicación real en WebKit con CLI simulados, sin gastar
 - `~/.ambidex/jev/`: Jev, si lo instalas. Se elimina desde Ajustes.
 - `~/Library/Application Support/Ambidex/attachments/`: imágenes que adjuntas o capturas de la Web.
 
+- **Pasar la configuración a otro equipo:** Ajustes → Datos locales → *Exportar ajustes* copia un JSON con modelos, enrutado, equipo, permisos, tema, prompts y diseños; en el otro equipo se pega en *Importar ajustes* (o se elige el fichero). No incluye conversaciones, proyectos, rutas de CLI, carpetas ni credenciales.
 - Si vienes de cuando la app se llamaba **Code AI**, sigue usando sus carpetas (`Application Support/Code AI` y `~/.code-ai`): la base de datos guarda rutas absolutas y moverlas las rompería.
 
 ## Rendimiento
