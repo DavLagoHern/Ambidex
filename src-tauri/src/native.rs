@@ -275,7 +275,7 @@ pub async fn dispatch(
             state.terminals.kill(str_arg(args, 0)?);
             Ok(Value::Null)
         }
-        "fs:list" | "fs:read" | "fs:write" | "fs:image" | "extensions:read"
+        "fs:list" | "fs:read" | "fs:binary" | "fs:write" | "fs:image" | "extensions:read"
         | "attachments:read" | "attachments:save" => {
             if state.roots.lock().unwrap().is_empty() {
                 engine::get(app, state).await?;
@@ -484,6 +484,7 @@ fn window(app: &tauri::AppHandle, label: &str, url: &str, width: f64) -> Result<
     Ok(())
 }
 const MAX_IMAGE: u64 = 8 * 1024 * 1024;
+const MAX_BINARY: u64 = 50 * 1024 * 1024;
 fn mime(path: &std::path::Path) -> Result<&'static str> {
     match path
         .extension()
@@ -592,6 +593,13 @@ fn files(state: &Backend, channel: &str, args: &[Value]) -> Result<Value> {
             Ok(
                 json!({"content":if binary{String::new()}else{String::from_utf8_lossy(&bytes).into_owned()},"binary":binary,"tooLarge":false}),
             )
+        }
+        "fs:binary" => {
+            if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_BINARY {
+                return Err("El fichero supera 50 MB".into());
+            }
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(json!(STANDARD.encode(bytes)))
         }
         "fs:write" => {
             std::fs::write(path, str_arg(args, 1)?).map_err(|e| e.to_string())?;

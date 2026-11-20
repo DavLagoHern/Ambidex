@@ -718,6 +718,7 @@ function handlers(): Handlers {
       return imageDataUrl(root, p)
     },
     'fs:read': (p) => files.readText(guard.check(p)),
+    'fs:binary': (p) => files.readBase64(guard.check(p)),
     'fs:write': async (p, content) => {
       await files.writeText(guard.check(p), content)
       store.audit(null, 'user', 'file.write', { path: p, bytes: content.length })

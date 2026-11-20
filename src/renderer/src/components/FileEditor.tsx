@@ -9,6 +9,8 @@ import { monacoTheme } from '../lib/monaco'
 import { Tab, usePS, useStore } from '../lib/project-store'
 import { errMsg, langFor } from '../lib/utils'
 import { Icon } from './Icons'
+import { Markdown } from './Markdown'
+import { FileViewer, viewerKind } from './FileViewer'
 
 const EDITOR_OPTS = {
   fontSize: 12.5,
@@ -24,6 +26,13 @@ const EDITOR_OPTS = {
 }
 
 export function FileEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' }>; visible: boolean }) {
+  const kind = viewerKind(tab.path)
+  return kind ? <FileViewer path={tab.path} kind={kind} visible={visible} /> : <TextEditor tab={tab} visible={visible} />
+}
+
+function TextEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' }>; visible: boolean }) {
+  const [preview, setPreview] = useState<string | null>(null)
+  const isMd = /\.(md|markdown|mdx)$/i.test(tab.path)
   const ps = usePS()
   const theme = useApp((s) => s.theme)
   const [file, setFile] = useState<FileContent | null>(null)
@@ -125,7 +134,19 @@ export function FileEditor({ tab, visible }: { tab: Extract<Tab, { kind: 'file' 
           </button>
         </div>
       )}
-      <div className="monaco-host">
+      {isMd && (
+        <div className="editor-toolbar">
+          <button className="btn ghost small" onClick={() => setPreview(preview === null ? (ed.current?.getValue() ?? file.content) : null)}>
+            {preview === null ? 'Vista previa' : 'Editar'}
+          </button>
+        </div>
+      )}
+      {preview !== null && (
+        <div className="md-preview">
+          <Markdown text={preview} />
+        </div>
+      )}
+      <div className="monaco-host" style={{ display: preview === null ? undefined : 'none' }}>
       <Editor
         path={tab.path}
         defaultValue={file.content}

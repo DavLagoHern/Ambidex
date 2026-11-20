@@ -81,6 +81,8 @@ export interface IpcContract {
   'fs:list': (dir: string) => DirEntry[]
   'fs:image': (path: string) => string
   'fs:read': (path: string) => FileContent
+  // binario (docx, xlsx, pptx, pdf…) en base64, solo de las carpetas del proyecto y hasta 50 MB
+  'fs:binary': (path: string) => string
   'fs:write': (path: string, content: string) => void
   'fs:watch': (projectId: string, dir: string) => void
   'fs:unwatch': (projectId: string) => void

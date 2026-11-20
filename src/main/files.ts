@@ -21,6 +21,11 @@ export async function readText(path: string): Promise<FileContent> {
   return { content: binary ? '' : buf.toString('utf8'), binary, tooLarge: false }
 }
 
+export async function readBase64(path: string): Promise<string> {
+  if ((await stat(path)).size > 50 * 1024 * 1024) throw new Error('El fichero supera 50 MB')
+  return (await readFile(path)).toString('base64')
+}
+
 export const writeText = (path: string, content: string) => writeFile(path, content, 'utf8')
 
 // Un vigilante por proyecto para refrescar Git y los editores cuando los agentes (u otros procesos) tocan ficheros

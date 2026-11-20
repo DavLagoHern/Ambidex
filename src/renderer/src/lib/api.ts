@@ -126,6 +126,7 @@ export const api = {
 
   listDir: bind('fs:list'),
   readFile: bind('fs:read'),
+  readBinary: bind('fs:binary'),
   writeFile: bind('fs:write'),
   watch: bind('fs:watch'),
   unwatch: bind('fs:unwatch'),
